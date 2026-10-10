@@ -15,8 +15,8 @@ from .Neo4j_connect import Neo4jGraph
 from .worker import invoke_with_retry
 from .mongodb_connection import db
 
-DEBUG = True      # set to False to silence debug output
-PARALLEL = False  # set to True to run several queries in parallel
+DEBUG = False     # keep normal retrieval quiet; enable only while debugging
+PARALLEL = True   # run independent converted queries concurrently
 
 # NOTE: all logging below uses Python's built-in print(), NOT rich's print.
 # Rich treats text like "[debug]" or "[red]" inside strings as markup and can
@@ -56,20 +56,15 @@ def debug(*args):
 # ---------------------------------------------------------------------------
 # Retrieval plan
 # ---------------------------------------------------------------------------
-def get_retrieval_plan(user_query: str, retries: int = 3):
-    last_error = None
-    for attempt in range(1, retries + 1):
-        try:
-            return invoke_with_retry(RetrievalRouter, [
-                SystemMessage(content=RetrivalRouter_plan),
-                HumanMessage(content=user_query),
-            ])
-        except Exception as e:  # parser errors, network errors, API errors
-            last_error = e
-            rprint(f"[red]Error getting retrieval plan: {escape(str(e))}[/red]")
-            print(f"Retrying {attempt}/{retries}...")
-    raise last_error
+def get_retrieval_plan(user_query: str):
+    """Ask the router once; invoke_with_retry already handles transient 503s.
 
+    A second retry loop here multiplied LLM calls (up to 9 attempts per query).
+    """
+    return invoke_with_retry(RetrievalRouter, [
+        SystemMessage(content=RetrivalRouter_plan),
+        HumanMessage(content=user_query),
+    ])
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -180,10 +175,28 @@ def Anchor_from_Pinecone(
     anchor_type = plan.anchor_entity.entity_type if plan.anchor_entity else None
     anchor_type_lc = anchor_type.lower() if anchor_type else None
 
+    # Fetch candidate memories in batches instead of one MongoDB round trip
+    # per Pinecone match.
+    grouped_ids = {}
+    for result in results[:top_k]:
+        memory_type = result["metadata"].get("memory_type")
+        memory_id = result.get("memory_id")
+        if memory_type not in VALID_MEMORY_TYPES or not ObjectId.is_valid(str(memory_id or "")):
+            continue
+        grouped_ids.setdefault(memory_type, set()).add(ObjectId(str(memory_id)))
+
+    docs_by_key = {}
+    for memory_type, ids in grouped_ids.items():
+        for doc in db[memory_type].find(
+            {"_id": {"$in": list(ids)}, "user_id": user_id},
+            {"entities": 1},
+        ):
+            docs_by_key[(memory_type, str(doc["_id"]))] = doc
+
     pairs = {}
     for result in results[:top_k]:
         memory_type = result["metadata"].get("memory_type")
-        doc = get_mongo_doc_from_memory_id(result["memory_id"], memory_type, user_id)
+        doc = docs_by_key.get((memory_type, str(result.get("memory_id"))))
         if not doc:
             continue
 
@@ -541,26 +554,37 @@ def convert_results_to_mongo_docs(results: dict, query_type: str, user_id: str):
         for r in results.get("graph", []):
             refs.append((r.get("memory_id"), r.get("memory_type")))
 
-    final_docs = []
+    # Deduplicate first, then fetch all matching memories with one query per
+    # memory collection rather than one network round trip per result.
+    unique_refs = []
     seen = set()
-
+    grouped_ids = {}
     for memory_id, memory_type in refs:
-        if not memory_id or not memory_type:
-            debug(f"Skipping result without memory_id/memory_type: {memory_id!r}, {memory_type!r}")
+        if not memory_id or memory_type not in VALID_MEMORY_TYPES:
             continue
         key = (str(memory_id), memory_type)
-        if key in seen:
+        if key in seen or not ObjectId.is_valid(str(memory_id)):
             continue
         seen.add(key)
+        unique_refs.append(key)
+        grouped_ids.setdefault(memory_type, set()).add(ObjectId(str(memory_id)))
 
-        doc = get_mongo_doc_from_memory_id(memory_id, memory_type, user_id)
-        if doc:  # never append None
+    docs_by_key = {}
+    for memory_type, ids in grouped_ids.items():
+        for doc in db[memory_type].find(
+            {"_id": {"$in": list(ids)}, "user_id": user_id}
+        ):
+            docs_by_key[(str(doc["_id"]), memory_type)] = doc
+
+    final_docs = []
+    for memory_id, memory_type in unique_refs:
+        doc = docs_by_key.get((memory_id, memory_type))
+        if doc:
             final_docs.append(doc)
         else:
             debug(f"Mongo doc not found: {memory_type}/{memory_id}")
 
     return final_docs
-
 
 # ---------------------------------------------------------------------------
 # Main entry point
