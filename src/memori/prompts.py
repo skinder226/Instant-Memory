@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
-from src.memori.schema import ALLOWED_RELATIONSHIPS
+from .schema import ALLOWED_RELATIONSHIPS
 current_datetime = "__CURRENT_DATETIME__"
 from typing import get_args
-from src.memori.schema import ALLOWED_RELATIONSHIPS
+from .schema import ALLOWED_RELATIONSHIPS
 
 RELATIONSHIPS_TEXT = ", ".join(get_args(ALLOWED_RELATIONSHIPS))
 
@@ -260,7 +260,7 @@ R2. Never turn a garbled pronoun/possessive (my/may/her/his/its/their/there/our/
 R3. Never turn prepositions/articles/filler (at/in/on/for/with/to/of/by/a/an/the) into entity names. "project al May compony" = "project at my company", not project "al"/company "May". If no real name survives, use a placeholder.
 R4. Third-party possessives ("her company", "his team", "my friend's agency") belong to that person. Never create user_company or user --works_at--> third-party company for them.
 R5. If the user says it is personal/side/unrelated to work, create NO user_company placeholder and NO works_at/built_at company link.
-R6. Questions and assistant-authored content create no memory.
+R6. The caller supplies the message source role. Save durable facts supported by the supplied message and set source_role to that exact role. Do not silently attribute assistant, tool, system, or other messages to the user. A message's source role records who said it; it does not make the message a verified fact about the user.
 R7. Never create a placeholder if the value is stated, however casual/lowercase/generic. "my memory system"/"my Neo project"/"my chatbot thing" -> use it as the real name (clean casing). Placeholder only when the message gives no identifying value ("my project", "a project"). Applies to company, city, school, tool, manager, person, etc.
 R8. Collaborator on a project ("with Ali"): the SAME project memory must contain user --works_on--> project, collaborator --works_on--> project, and user --works_with--> collaborator. Never drop the collaborator->project edge. Not split per D5.
 R9. Two projects/a project and a larger goal linked by "X for building Y / X for Y / X to support Y / X as part of Y / X which is part of Y / X that will power Y / X used to build Y": keep BOTH in one memory: user --works_on--> X, user --works_on--> Y, and X --built_for--> Y (purpose/dependency) or X --part_of--> Y (compositional). Never drop Y. If one project already exists, update it (reuse its id) to add the missing edge.
