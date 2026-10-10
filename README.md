@@ -4,57 +4,49 @@ Instant-Memory is a MongoDB-first memory pipeline with semantic retrieval throug
 
 ## Public API
 
-The intended application interface is one function:
+Use one function to retrieve memories for a message:
 
-```python
-from memori import memori
+    from memori import memori
 
-# Process a user message: classify, retrieve when needed, and save new memories.
-result = memori(
-    user_id="user_123",
-    user_input="My name is Skinder and I work at Acme.",
-    source="user",
-)
+    result = memori(
+        user_id="user_123",
+        user_input="Where do I work?",
+        source="user",
+    )
 
-# Record an assistant-authored message with its original source role.
-result = memori(
-    user_id="user_123",
-    user_input="The assistant suggested using PostgreSQL for this project.",
-    source="assistant",  # "ai" is also accepted as an alias
-)
+    # Give the retrieved memories to your application's LLM.
+    memories = result["retrieval"]
+    answer = your_llm.invoke({
+        "question": "Where do I work?",
+        "memories": memories,
+    })
 
-# Other message sources are accepted and stored as source_role="other".
-result = memori(
-    user_id="user_123",
-    user_input="Tool returned: build completed.",
-    source="tool",
-)
-```
+## Execution behavior
 
-`source` accepts `user`, `assistant` (or `ai`), `tool`, `system`, or another string. Unknown roles are normalized to `other`. The source role is stored on each extracted memory; it is not proof that a message's claims are true.
+- **Retrieval is synchronous.** If needed, memori waits for retrieval and returns the retrieved memory documents in result["retrieval"]. Your application LLM uses those documents to generate the final answer.
+- **Memory extraction and saving are asynchronous.** If the message should be saved, memori schedules extraction and MongoDB/outbox writes in a background thread and returns without waiting for that work.
+- **Pinecone and Neo4j synchronization** is queued separately after the MongoDB/outbox write.
+- If retrieval is not needed, result["retrieval"] is an empty list.
+- result["memory_save_scheduled"] indicates whether background processing was queued; it does not guarantee that processing later succeeds. Background failures are logged.
 
-For user messages, Memori decides whether to retrieve stored memories and/or save new durable information. Non-user messages are not used to answer user questions, but can be processed for memory extraction with their source role preserved.
+## Message source
 
-The function returns a dictionary containing the user ID, normalized source, retrieval result (if any), number of memories saved, and number of placeholder updates.
+The source parameter accepts user, assistant (or ai), tool, system, or another string. Unknown roles are normalized to other. The source role is stored on each extracted memory; it is not proof that a message's claims are true. Non-user messages are saved in the background but do not trigger user-question retrieval.
 
 ## Setup
 
 1. Install Python 3.11 or newer (below 3.15).
 2. Install dependencies from the repository:
 
-   ```bash
-   uv sync
-   ```
+       uv sync
 
-3. Configure the existing provider and database environment variables in a local `.env` file. Do not commit secrets. The current implementation uses MongoDB as the source of truth, Pinecone for semantic retrieval, and Neo4j for graph retrieval.
+3. Configure the existing provider and database environment variables in a local .env file. Do not commit secrets. The implementation uses MongoDB as the source of truth, Pinecone for semantic retrieval, and Neo4j for graph retrieval.
 4. From the repository root, import the package as shown above.
 
 ## Development
 
-Run the tests with:
+Run tests with:
 
-```bash
-uv run pytest
-```
+    uv run pytest
 
-MongoDB is the source of truth. Memory writes create outbox events for background synchronization to Pinecone and Neo4j. Every memory operation is scoped by `user_id`.
+MongoDB is the source of truth. Memory writes create outbox events for background synchronization to Pinecone and Neo4j. Every memory operation is scoped by user_id.
