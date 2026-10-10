@@ -165,10 +165,15 @@ def Anchor_from_Pinecone(
     plan: RetrievalPlan,
     user_id: str,
     top_k: int = 5,
+    candidates: list[dict] | None = None,
 ) -> list[ResolvedAnchor]:
-    """Find anchor nodes from the entities inside the memories Pinecone
-    returns. Neo4j is queried ONCE for all unique (name, type) pairs."""
-    results = Retrieval_for_Pinecone(plan, user_id, top_k=top_k)
+    """Find graph anchors from existing Pinecone candidates when available.
+
+    Passing candidates avoids repeating the same embedding and Pinecone query.
+    """
+    results = candidates if candidates is not None else Retrieval_for_Pinecone(
+        plan, user_id, top_k=top_k
+    )
     if not results:
         return []
 
@@ -445,20 +450,48 @@ def Graph_Traversal(
 # ---------------------------------------------------------------------------
 # Retrieval strategies
 # ---------------------------------------------------------------------------
-def _get_anchors(plan: RetrievalPlan, user_id: str) -> list[ResolvedAnchor]:
+def _get_anchors(
+    plan: RetrievalPlan,
+    user_id: str,
+    pinecone_candidates: list[dict] | None = None,
+) -> list[ResolvedAnchor]:
     if plan.entities:
         anchors = Anchor_Resolver(user_id, plan)
     else:
-        anchors = Anchor_from_Pinecone(plan, user_id, 5)
+        anchors = Anchor_from_Pinecone(
+            plan, user_id, 5, candidates=pinecone_candidates
+        )
     debug("Anchors:", anchors)
     return anchors
 
 
 def hybrid_retrieval(plan: RetrievalPlan, user_id: str):
+    # Pinecone results are reused for anchor discovery, avoiding a second
+    # embedding request and duplicate vector query.
     pinecone_results = Retrieval_for_Pinecone(plan, user_id)
-    anchors = _get_anchors(plan, user_id)
-    graph_results = Graph_Traversal(plan, anchors, user_id)
+
+    if plan.entities:
+        # With explicit entities, graph retrieval does not depend on the
+        # Pinecone candidates, so execute the two independent branches together.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            graph_future = pool.submit(
+                _retrieve_graph_results, plan, user_id, None
+            )
+            graph_results = graph_future.result()
+    else:
+        anchors = _get_anchors(plan, user_id, pinecone_results)
+        graph_results = Graph_Traversal(plan, anchors, user_id)
+
     return {"pinecone": pinecone_results, "graph": graph_results}
+
+
+def _retrieve_graph_results(
+    plan: RetrievalPlan,
+    user_id: str,
+    pinecone_candidates: list[dict] | None = None,
+) -> list[dict]:
+    anchors = _get_anchors(plan, user_id, pinecone_candidates)
+    return Graph_Traversal(plan, anchors, user_id)
 
 
 def semantic_retrieval(plan: RetrievalPlan, user_id: str):
