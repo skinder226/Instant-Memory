@@ -406,8 +406,8 @@ def Graph_Traversal(
 
             next_nodes = []
 
-            for current_node in current_nodes:
-                result = Neo4jGraph.query(
+            def query_current_node(current_node):
+                return Neo4jGraph.query(
                     query,
                     params={
                         "user_id": user_id,
@@ -418,6 +418,15 @@ def Graph_Traversal(
                     },
                 )
 
+            # Nodes at the same hop are independent. Query them concurrently,
+            # but keep hops sequential because each hop depends on the prior one.
+            if len(current_nodes) > 1:
+                with ThreadPoolExecutor(max_workers=min(4, len(current_nodes))) as pool:
+                    results_by_node = list(pool.map(query_current_node, current_nodes))
+            else:
+                results_by_node = [query_current_node(node) for node in current_nodes]
+
+            for current_node, result in zip(current_nodes, results_by_node):
                 debug(
                     f"Hop {hop} from {current_node['name']!r}: "
                     f"{len(result or [])} rows"
@@ -452,7 +461,6 @@ def Graph_Traversal(
                             # not reliable when nodes have several labels.
                             "entity_type": None,
                         })
-
             current_nodes = next_nodes
             if not current_nodes:
                 break
