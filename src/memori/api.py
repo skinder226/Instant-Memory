@@ -116,13 +116,13 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     role = _source_role(source)
 
     # Heavy providers and connections are imported only when the API is called.
-    from src.memori.fast_context import get_context_fast, build_extractor_prompt
-    from src.memori.mongodb_connection import db
-    from src.memori.prompts import system_message, memory_decision_prompt
-    from src.memori.llms import memory_extractor, MemoryDecisionGate
-    from src.memori.worker import save_pending_memory, invoke_with_retry
-    from src.memori.retival_worker import retrieve_memory
-    from src.memori.update_placeholders import (
+    from .fast_context import get_context_fast, build_extractor_prompt
+    from .mongodb_connection import db
+    from .prompts import system_message, memory_decision_prompt
+    from .llms import memory_extractor, MemoryDecisionGate
+    from .worker import save_pending_memory, invoke_with_retry
+    from .retival_worker import retrieve_memory
+    from .update_placeholders import (
         update_mongo_placeholders, update_neo4j_placeholders,
         update_pinecone_placeholders,
     )
