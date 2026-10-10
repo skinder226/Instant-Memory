@@ -11,6 +11,7 @@ MessageRole = Literal[
     "assistant",
     "tool",
     "system",
+    "other",
 ]
 
 
