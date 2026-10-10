@@ -114,10 +114,47 @@ def _save_message_background(user_id: str, user_input: str, role: str,
             "Do not relabel assistant/tool/system/other messages as user messages. "
             "Extract only durable information supported by this message."
         )
-        response = invoke_with_retry(
-            memory_extractor,
-            [{"role": "system", "content": prompt}, {"role": "user", "content": user_input}],
-        )
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_input},
+        ]
+        try:
+            response = invoke_with_retry(memory_extractor, messages)
+        except Exception as first_error:
+            # Groq may reject requests that exceed the configured token budget.
+            # Retry once without historical context, preserving the extraction
+            # instructions and current message. Do not retry unrelated errors.
+            status_code = getattr(first_error, "status_code", None)
+            error_text = str(first_error).lower()
+            is_oversized = status_code == 413 or (
+                "tokens per minute" in error_text
+                or "request too large" in error_text
+                or "reduce your message size" in error_text
+            )
+            if not is_oversized or not context:
+                raise
+
+            logger.warning(
+                "Extractor request too large for user_id=%s; retrying without memory context",
+                user_id,
+            )
+            compact_prompt = build_extractor_prompt(
+                system_message,
+                datetime.now(timezone.utc).isoformat(),
+                user_id,
+                [],
+                pending_placeholders[:20],
+            )
+            compact_prompt += (
+                f"\n\nCALLER-PROVIDED MESSAGE SOURCE: {role}. "
+                "Set source_role on every extracted memory to this exact role. "
+                "Do not relabel assistant/tool/system/other messages as user messages. "
+                "Extract only durable information supported by this message."
+            )
+            response = invoke_with_retry(memory_extractor, [
+                {"role": "system", "content": compact_prompt},
+                {"role": "user", "content": user_input},
+            ])
 
         for memory in response.memories:
             memory_data = memory.model_dump()
