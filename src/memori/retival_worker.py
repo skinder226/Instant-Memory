@@ -6,14 +6,14 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from rich import print as rprint
 from rich.markup import escape
 
-from src.memori.llms import RetrievalRouter, query_converter
-from src.memori.prompts import RetrivalRouter_plan, query_converter_prompt
-from src.memori.schema import RetrievalPlan, ResolvedAnchor
-from src.memori.embeddings import embeddings
-from src.memori.vector_str import index
-from src.memori.Neo4j_connect import Neo4jGraph
-from src.memori.worker import invoke_with_retry
-from src.memori.mongodb_connection import db
+from .llms import RetrievalRouter, query_converter
+from .prompts import RetrivalRouter_plan, query_converter_prompt
+from .schema import RetrievalPlan, ResolvedAnchor
+from .embeddings import embeddings
+from .vector_str import index
+from .Neo4j_connect import Neo4jGraph
+from .worker import invoke_with_retry
+from .mongodb_connection import db
 
 DEBUG = True      # set to False to silence debug output
 PARALLEL = False  # set to True to run several queries in parallel
