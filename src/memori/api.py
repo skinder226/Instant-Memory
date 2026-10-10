@@ -231,6 +231,10 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         if not decision.needs_saving:
             return result
         saving_needs_context = bool(decision.saving_needs_context)
+    elif role == "assistant":
+        # Assistant-generated answers are not source facts. Do not send them
+        # through extraction or save them back as user memories.
+        return result
     else:
         saving_needs_context = True
 
