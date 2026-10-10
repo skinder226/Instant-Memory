@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "agentic-memory-engin"
+name = "instant-memori"
 version = "0.1.0"
-description = "Add your description here"
+description = "A MongoDB-first personal memory pipeline with semantic and graph retrieval."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
@@ -28,6 +32,11 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = [
-    "pytest>=8.0",
-]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["memori*"]
