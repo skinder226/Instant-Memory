@@ -466,19 +466,18 @@ def _get_anchors(
 
 
 def hybrid_retrieval(plan: RetrievalPlan, user_id: str):
-    # Pinecone results are reused for anchor discovery, avoiding a second
-    # embedding request and duplicate vector query.
-    pinecone_results = Retrieval_for_Pinecone(plan, user_id)
-
     if plan.entities:
-        # With explicit entities, graph retrieval does not depend on the
-        # Pinecone candidates, so execute the two independent branches together.
+        # Explicit graph anchors mean Pinecone and graph retrieval are
+        # independent, so overlap their network latency.
         with ThreadPoolExecutor(max_workers=2) as pool:
-            graph_future = pool.submit(
-                _retrieve_graph_results, plan, user_id, None
-            )
+            pinecone_future = pool.submit(Retrieval_for_Pinecone, plan, user_id)
+            graph_future = pool.submit(_retrieve_graph_results, plan, user_id)
+            pinecone_results = pinecone_future.result()
             graph_results = graph_future.result()
     else:
+        # Without explicit anchors, reuse the Pinecone candidates to discover
+        # graph anchors rather than embedding and querying Pinecone twice.
+        pinecone_results = Retrieval_for_Pinecone(plan, user_id)
         anchors = _get_anchors(plan, user_id, pinecone_results)
         graph_results = Graph_Traversal(plan, anchors, user_id)
 
