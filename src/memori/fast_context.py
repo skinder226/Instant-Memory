@@ -14,7 +14,9 @@ PLACEHOLDER_RE = re.compile(r"\((user_[a-z][a-z0-9_]*)\)")
 
 # Max memories sent to the extractor as context. Pending-placeholder
 # memories are always kept first, so they are never cut off.
-MAX_CONTEXT_DOCS = 30
+MAX_CONTEXT_DOCS = 12
+MAX_CONTENT_CHARS = 800
+MAX_ENTITIES_PER_MEMORY = 6
 
 
 # ---------------------------------------------------------------------------
@@ -46,13 +48,41 @@ def _find_current_docs(memory_type: str, user_id: str) -> list[dict]:
     )
 
 
+def _compact_node(node):
+    if not isinstance(node, dict):
+        return node
+    return {
+        key: node.get(key)
+        for key in ("name", "type")
+        if node.get(key) is not None
+    }
+
+
+def _compact_entity(entity):
+    if not isinstance(entity, dict):
+        return entity
+    compact = {}
+    if entity.get("source") is not None:
+        compact["source"] = _compact_node(entity["source"])
+    if entity.get("relationship") is not None:
+        compact["relationship"] = entity["relationship"]
+    if entity.get("target") is not None:
+        compact["target"] = _compact_node(entity["target"])
+    return compact
+
+
 def _compact(doc: dict) -> dict:
-    """Keep only what the extractor needs (smaller prompt = faster call)."""
+    """Keep the most useful context while bounding prompt size."""
+    content = doc.get("content") or ""
+    entities = doc.get("entities") or []
     return {
         "id": str(doc.get("id") or doc["_id"]),
         "type": doc.get("type"),
-        "content": doc.get("content"),
-        "entities": doc.get("entities", []),
+        "content": content[:MAX_CONTENT_CHARS],
+        "entities": [
+            _compact_entity(entity)
+            for entity in entities[:MAX_ENTITIES_PER_MEMORY]
+        ],
     }
 
 
