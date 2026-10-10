@@ -3,7 +3,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
-from src.memori.mongodb_connection import db
+from .mongodb_connection import db
 
 MEMORY_TYPES = [
     "profile", "fact", "preference", "semantic", "episodic",
