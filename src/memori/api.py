@@ -168,11 +168,6 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     user_id, user_input = user_id.strip(), user_input.strip()
     role = _source_role(source)
 
-    from .prompts import memory_decision_prompt
-    from .llms import MemoryDecisionGate
-    from .worker import invoke_with_retry
-    from .retival_worker import retrieve_memory
-
     result: dict[str, Any] = {
         "user_id": user_id,
         "source": role,
@@ -181,6 +176,12 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     }
 
     if role == "user":
+        # Non-user sources never import or execute the retrieval path.
+        from .prompts import memory_decision_prompt
+        from .llms import MemoryDecisionGate
+        from .worker import invoke_with_retry
+        from .retival_worker import retrieve_memory
+
         decision = invoke_with_retry(
             MemoryDecisionGate,
             [{"role": "system", "content": memory_decision_prompt},
