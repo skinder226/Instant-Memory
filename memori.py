@@ -17,13 +17,17 @@ from src.memori.worker import save_pending_memory
 from src.memori.mongodb_connection import db
 from src.memori.prompts import system_message, memory_decision_prompt
 from src.memori.llms import memory_extractor, MemoryDecisionGate
+from src.memori.worker import invoke_with_retry
 
 
 def Memory_Decision(user_input):
-    return MemoryDecisionGate.invoke([
-        {"role": "system", "content": memory_decision_prompt},
-        {"role": "user", "content": user_input},
-    ])
+    return invoke_with_retry(
+        MemoryDecisionGate,
+        [
+            {"role": "system", "content": memory_decision_prompt},
+            {"role": "user", "content": user_input},
+        ],
+    )
 
 
 def _all_memory_collections():
@@ -161,10 +165,13 @@ def save_memory(user_id, user_input, saving_needs_context):
 
     try:
         with timed("extractor LLM"):
-            response = memory_extractor.invoke([
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_input},
-            ])
+            response = invoke_with_retry(
+                memory_extractor,
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_input},
+                ],
+            )
     except Exception as e:
         print(f"Error during memory extraction: {e}")
         return False
@@ -204,30 +211,22 @@ def save_memory(user_id, user_input, saving_needs_context):
     return bool(response.memories or response.placeholder_updates)
 
 
-def main(user_id):
-    while True:
-        user_input = input("\nEnter your input (or type 'exit' to quit): ").strip()
-        if user_input.lower() in {"exit", "quit"}:
-            break
+def memori(user_id,user_input):
 
-        with timed("decision LLM"):
-            decision = Memory_Decision(user_input)
+    with timed("decision LLM"):
+        decision = Memory_Decision(user_input)
+    retrived_memory = []
+    if decision.needs_retrieval:
+        retrived_memory = retrieve_memory(user_id=user_id, user_query=user_input)
 
-        if decision.needs_retrieval:
-            print(retrieve_memory(user_id=user_id, user_query=user_input))
-
-        if decision.needs_saving:
-            save_memory(
-                user_id=user_id,
-                user_input=user_input,
-                saving_needs_context=decision.saving_needs_context,
-            )
-
-    print("Exiting...")
+    if decision.needs_saving:
+        save_memory(
+            user_id=user_id,
+            user_input=user_input,
+            saving_needs_context=decision.saving_needs_context,
+        )
+    print(retrived_memory)
+    return retrived_memory
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--user-id", required=True)
-    args = parser.parse_args()
-    main(args.user_id)
+

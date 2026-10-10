@@ -12,6 +12,7 @@ from src.memori.schema import RetrievalPlan, ResolvedAnchor
 from src.memori.embeddings import embeddings
 from src.memori.vector_str import index
 from src.memori.Neo4j_connect import Neo4jGraph
+from src.memori.worker import invoke_with_retry
 from src.memori.mongodb_connection import db
 
 DEBUG = True      # set to False to silence debug output
@@ -46,25 +47,6 @@ SOCIAL = [
 MAX_HOPS_CAP = 3
 
 
-import time
-from openai import APIStatusError
-
-
-def invoke_with_retry(runnable, messages, retries=3):
-    for attempt in range(retries):
-        try:
-            return runnable.invoke(messages)
-
-        except APIStatusError as e:
-            if e.status_code != 503 or attempt == retries - 1:
-                raise
-
-            wait = 2 ** attempt
-            print(
-                f"LLM temporarily unavailable (503). "
-                f"Retrying in {wait}s..."
-            )
-            time.sleep(wait)
 
 def debug(*args):
     if DEBUG:
@@ -78,7 +60,7 @@ def get_retrieval_plan(user_query: str, retries: int = 3):
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            return RetrievalRouter.invoke([
+            return invoke_with_retry(RetrievalRouter, [
                 SystemMessage(content=RetrivalRouter_plan),
                 HumanMessage(content=user_query),
             ])
@@ -603,7 +585,7 @@ def retrieve_memory(user_query: str, user_id: str):
             if doc_id in seen_ids:
                 continue
             seen_ids.add(doc_id)
-            unique_docs.append(doc)
+            unique_docs.append(doc["content"] if "content" in doc else doc)
 
     print(f"Final Results: {len(unique_docs)} unique documents retrieved.\n")
     return unique_docs

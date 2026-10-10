@@ -121,16 +121,7 @@ class Entity(BaseModel):
         )
     )
 
-    properties: RelationshipProperties = Field(
-        default_factory=RelationshipProperties,
-        description=(
-            "Additional contextual properties belonging to this specific "
-            "relationship. For example, if the user says "
-            "'I work at Microsoft as CEO', store "
-            "{'role': 'CEO'} on the WORKS_AT relationship rather than "
-            "creating a separate HAS_ROLE relationship."
-        )
-    )
+    
 
 
 # ============================================================

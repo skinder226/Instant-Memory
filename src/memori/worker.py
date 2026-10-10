@@ -178,3 +178,26 @@ def save_pending_memory(user_id):
     future = _executor.submit(_save_pending_memory_worker, user_id)
     future.add_done_callback(_log_future)
     return future
+
+
+
+
+import time
+from openai import APIStatusError
+
+
+def invoke_with_retry(runnable, messages, retries=3):
+    for attempt in range(retries):
+        try:
+            return runnable.invoke(messages)
+
+        except APIStatusError as e:
+            if e.status_code != 503 or attempt == retries - 1:
+                raise
+
+            wait = 2 ** attempt
+            print(
+                f"LLM temporarily unavailable (503). "
+                f"Retrying in {wait}s..."
+            )
+            time.sleep(wait)

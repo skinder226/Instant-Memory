@@ -118,38 +118,3 @@ def build_extractor_prompt(
         + f"\n\nPending placeholders: {pending_placeholders}"
     )
 
-
-# ---------------------------------------------------------------------------
-# How to use it in main.py
-# ---------------------------------------------------------------------------
-#
-#   from src.memori.fast_context import timed, get_context_fast, build_extractor_prompt
-#
-#   def save_memory(user_id, user_input, saving_needs_context):
-#       current_time = datetime.now(timezone.utc).isoformat()
-#
-#       if saving_needs_context:
-#           with timed("context (mongo)"):
-#               ctx = get_context_fast(user_id)
-#           context = ctx["context"]
-#           pending_placeholder = ctx["pending_placeholders"]
-#       else:
-#           context, pending_placeholder = [], []
-#
-#       system_prompt = build_extractor_prompt(
-#           system_message, current_time, user_id, context, pending_placeholder
-#       )
-#
-#       with timed("extractor LLM"):
-#           response = memory_extractor.invoke([
-#               {"role": "system", "content": system_prompt},
-#               {"role": "user", "content": user_input},
-#           ])
-#       ...rest unchanged...
-#
-# And in main(), time the decision call too:
-#
-#       with timed("decision LLM"):
-#           memory_decision = Memory_Decision(user_input)
-#
-# Keep retrieve_memory(...) ONLY for answering questions (needs_retrieval).
