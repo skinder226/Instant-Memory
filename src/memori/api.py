@@ -123,6 +123,42 @@ def _save_memory_and_outbox(db: Any, memory_data: dict, user_id: str) -> tuple[s
     return _save_memories_and_outbox(db, [memory_data], user_id)[0]
 
 
+def _is_request_too_large(error: Exception) -> bool:
+    status_code = getattr(error, "status_code", None)
+    response = getattr(error, "response", None)
+    if status_code is None and response is not None:
+        status_code = getattr(response, "status_code", None)
+    message = str(error).lower()
+    return status_code == 413 or any(
+        marker in message
+        for marker in (
+            "tokens per minute", "request too large",
+            "reduce your message size", "rate_limit_exceeded",
+        )
+    )
+
+
+def _compact_extractor_system_message() -> str:
+    """Small fallback prompt used only when the full prompt exceeds provider limits."""
+    return (
+        "You are a memory extraction engine. Analyze ONLY the latest supplied message. "
+        "Use existing memories only to detect duplicates, updates, and resolve listed placeholders; "
+        "never treat context as new facts. Do not answer the message. Use the structured output schema. "
+        "Return no memory for duplicate, non-durable, unsupported, or assistant-generated claims. "
+        "Extract each distinct durable fact; update an existing memory only with its exact existing id, "
+        "otherwise use a null id. Never invent names, facts, or ids. Fix obvious typos without turning "
+        "pronouns/prepositions into names. Named people use their actual names; use user_friend, "
+        "user_manager, user_company, user_project, user_location, or user_school only when a value "
+        "is genuinely unknown. Every placeholder must appear as (user_x) in content, in placeholders, "
+        "and in any corresponding entity node. Resolve a listed placeholder only when this message "
+        "provides its real value; output placeholder_updates and do not recreate that memory. "
+        "Memory type must be exactly one of profile, fact, preference, semantic, episodic, procedural, "
+        "goal, event, task, project, temporal. Preserve source_role supplied by the caller. "
+        "Return empty memories and placeholder_updates when nothing qualifies. "
+        "Keep entities valid and avoid null/empty entity values."
+    )
+
+
 def _save_message_background(user_id: str, user_input: str, role: str,
                              saving_needs_context: bool) -> None:
     """Extract and persist memories without delaying the retrieval response."""
@@ -160,40 +196,54 @@ def _save_message_background(user_id: str, user_input: str, role: str,
         try:
             response = invoke_with_retry(memory_extractor, messages)
         except Exception as first_error:
-            # Groq may reject requests that exceed the configured token budget.
-            # Retry once without historical context, preserving the extraction
-            # instructions and current message. Do not retry unrelated errors.
-            status_code = getattr(first_error, "status_code", None)
-            error_text = str(first_error).lower()
-            is_oversized = status_code == 413 or (
-                "tokens per minute" in error_text
-                or "request too large" in error_text
-                or "reduce your message size" in error_text
-            )
-            if not is_oversized or not context:
+            if not _is_request_too_large(first_error):
                 raise
 
+            # Stage 1: remove historical context but preserve the full instructions.
             logger.warning(
-                "Extractor request too large for user_id=%s; retrying without memory context",
+                "Extractor request exceeded provider limit for user_id=%s; retrying without context",
                 user_id,
             )
-            compact_prompt = build_extractor_prompt(
+            no_context_prompt = build_extractor_prompt(
                 system_message,
                 datetime.now(timezone.utc).isoformat(),
                 user_id,
                 [],
-                pending_placeholders[:20],
+                pending_placeholders[:8],
             )
-            compact_prompt += (
+            no_context_prompt += (
                 f"\n\nCALLER-PROVIDED MESSAGE SOURCE: {role}. "
                 "Set source_role on every extracted memory to this exact role. "
                 "Do not relabel assistant/tool/system/other messages as user messages. "
                 "Extract only durable information supported by this message."
             )
-            response = invoke_with_retry(memory_extractor, [
-                {"role": "system", "content": compact_prompt},
-                {"role": "user", "content": user_input},
-            ])
+            try:
+                response = invoke_with_retry(memory_extractor, [
+                    {"role": "system", "content": no_context_prompt},
+                    {"role": "user", "content": user_input},
+                ])
+            except Exception as second_error:
+                if not _is_request_too_large(second_error):
+                    raise
+
+                # Stage 2: the long system prompt itself may exceed the limit.
+                # Use compact instructions and let MemorySchema constrain output.
+                logger.warning(
+                    "Extractor still exceeds provider limit for user_id=%s; "
+                    "retrying with compact instructions",
+                    user_id,
+                )
+                compact_prompt = (
+                    _compact_extractor_system_message()
+                    + f"\n\nRuntime timestamp: {datetime.now(timezone.utc).isoformat()}"
+                    + f"\nuser_id: {user_id}"
+                    + f"\nPending placeholders: {pending_placeholders[:8]}"
+                    + f"\nCaller-provided source_role: {role}"
+                )
+                response = invoke_with_retry(memory_extractor, [
+                    {"role": "system", "content": compact_prompt},
+                    {"role": "user", "content": user_input},
+                ])
 
         if response.memories:
             memory_data = []
@@ -242,9 +292,10 @@ def _log_background_future(future):
 
 
 def memori(user_id: str, user_input: str, source: str = "user") -> dict:
-    """Return retrieved memories synchronously; schedule extraction and saving asynchronously.
+    """Retrieve synchronously only when needed; save asynchronously.
 
-    Your application LLM should use result['retrieval'] to generate its answer.
+    If retrieval is unnecessary, the returned retrieval field is an empty list.
+    Saving is queued before retrieval starts and is never awaited by this function.
     """
     if not isinstance(user_id, str) or not user_id.strip():
         raise ValueError("user_id must be a non-empty string.")
@@ -253,7 +304,6 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
 
     user_id, user_input = user_id.strip(), user_input.strip()
     role = _source_role(source)
-
     result: dict[str, Any] = {
         "user_id": user_id,
         "source": role,
@@ -261,57 +311,57 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         "memory_save_scheduled": False,
     }
 
-    if role == "user":
-        # Non-user sources never import or execute the retrieval path.
-        from .prompts import memory_decision_prompt, query_converter_prompt
-        from .llms import MemoryDecisionGate, query_converter
-        from .worker import invoke_with_retry
-        from .retival_worker import retrieve_memory
-
-        # These two independent classifications run concurrently. The retrieval
-        # planner still runs after query conversion because it needs each
-        # converted query, but the gate no longer adds a full serial LLM wait.
-        gate_future = _routing_executor.submit(
-            invoke_with_retry,
-            MemoryDecisionGate,
-            [{"role": "system", "content": memory_decision_prompt},
-             {"role": "user", "content": user_input}],
-        )
-        converter_future = _routing_executor.submit(
-            invoke_with_retry,
-            query_converter,
-            [{"role": "system", "content": query_converter_prompt},
-             {"role": "user", "content": user_input}],
-        )
-        decision = gate_future.result()
-
-        # Retrieval must finish before the caller's LLM can use its results.
-        if decision.needs_retrieval:
-            converter_response = converter_future.result()
-            result["retrieval"] = retrieve_memory(
-                user_query=user_input,
-                user_id=user_id,
-                converter_response=converter_response,
-            )
-        else:
-            # If the converter already started, consume/log its exception in
-            # the background rather than blocking a non-retrieval request.
-            if not converter_future.cancel():
-                converter_future.add_done_callback(_log_background_future)
-        if not decision.needs_saving:
-            return result
-        saving_needs_context = bool(decision.saving_needs_context)
-    elif role == "assistant":
-        # Assistant-generated answers are not source facts. Do not send them
-        # through extraction or save them back as user memories.
+    if role == "assistant":
+        # Assistant-generated answers are not source facts.
         return result
-    else:
-        saving_needs_context = True
 
-    # Do not wait for this future. Extraction, MongoDB writes, and placeholder
-    # updates happen off the request path; vector/graph sync is queued separately.
-    _background_executor.submit(
-        _save_message_background, user_id, user_input, role, saving_needs_context,
+    if role != "user":
+        _background_executor.submit(
+            _save_message_background, user_id, user_input, role, True,
+        )
+        result["memory_save_scheduled"] = True
+        return result
+
+    from .prompts import memory_decision_prompt, query_converter_prompt
+    from .llms import MemoryDecisionGate, query_converter
+    from .worker import invoke_with_retry
+
+    # Run the gate and query conversion concurrently; cancel/ignore conversion
+    # when the gate says no retrieval is required.
+    converter_future = _routing_executor.submit(
+        invoke_with_retry,
+        query_converter,
+        [{"role": "system", "content": query_converter_prompt},
+         {"role": "user", "content": user_input}],
     )
-    result["memory_save_scheduled"] = True
+    decision = invoke_with_retry(
+        MemoryDecisionGate,
+        [{"role": "system", "content": memory_decision_prompt},
+         {"role": "user", "content": user_input}],
+    )
+
+    # Schedule extraction and saving BEFORE retrieval. This work must not delay
+    # the caller's retrieval result.
+    if decision.needs_saving:
+        _background_executor.submit(
+            _save_message_background,
+            user_id,
+            user_input,
+            role,
+            bool(decision.saving_needs_context),
+        )
+        result["memory_save_scheduled"] = True
+
+    if not decision.needs_retrieval:
+        if not converter_future.cancel():
+            converter_future.add_done_callback(_log_background_future)
+        return result
+
+    from .retival_worker import retrieve_memory
+    converter_response = converter_future.result()
+    result["retrieval"] = retrieve_memory(
+        user_query=user_input,
+        user_id=user_id,
+        converter_response=converter_response,
+    )
     return result
