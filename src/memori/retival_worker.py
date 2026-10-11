@@ -1,10 +1,8 @@
+import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
 
 from bson.objectid import ObjectId
 from langchain_core.messages import SystemMessage, HumanMessage
-from rich import print as rprint
-from rich.markup import escape
 
 from .llms import RetrievalRouter, query_converter
 from .prompts import RetrivalRouter_plan, query_converter_prompt
@@ -15,13 +13,11 @@ from .Neo4j_connect import Neo4jGraph
 from .worker import invoke_with_retry
 from .mongodb_connection import db
 
-DEBUG = False     # keep normal retrieval quiet; enable only while debugging
-PARALLEL = True   # run independent converted queries concurrently
+logger = logging.getLogger(__name__)
+DEBUG = False
+PARALLEL = True
+MAX_GRAPH_ROWS_PER_HOP = 500
 
-# NOTE: all logging below uses Python's built-in print(), NOT rich's print.
-# Rich treats text like "[debug]" or "[red]" inside strings as markup and can
-# swallow or alter the output, which hides exactly the lines you need to see.
-print("=== retrieval.py v3 loaded ===")
 
 # Relationship names are never inserted into the Cypher text; they are passed
 # as a query parameter. So a regex check is enough for safety and we do NOT
@@ -50,7 +46,7 @@ MAX_HOPS_CAP = 3
 
 def debug(*args):
     if DEBUG:
-        print("DEBUG:", *args)
+        logger.debug("%s", " ".join(str(arg) for arg in args))
 
 
 # ---------------------------------------------------------------------------
@@ -356,117 +352,108 @@ def Graph_Traversal(
     resolved_anchors: list[ResolvedAnchor],
     user_id: str,
 ) -> list[dict]:
-    # None means "both current and historical", same as Pinecone.
+    """Traverse one hop at a time, batching every frontier into one Cypher query."""
     is_current = plan.is_current
-
     hops = _build_hops(plan)
     all_results = []
     seen_rows = set()
+    visited_by_root = {}
+    current_nodes = []
 
-    for anchor in resolved_anchors:
-        current_nodes = [{
+    for root_id, anchor in enumerate(resolved_anchors):
+        visited_by_root[root_id] = {anchor.name.lower()}
+        current_nodes.append({
+            "root_id": root_id,
             "name": anchor.name,
             "entity_type": anchor.entity_type,
-        }]
-        visited = {anchor.name.lower()}
+        })
 
-        for hop in hops:
-            if hop["relationship"]:
-                rels_lc = expand_relationships(hop["relationship"])
-                if not rels_lc:
-                    debug(f"Invalid relationship {hop['relationship']!r}, stopping.")
-                    break
-            else:
-                rels_lc = []  # generic hop: any relationship
-
-            pattern = _build_pattern(hop["direction"])
-
-            query = f"""
-            MATCH (start {{user_id: $user_id}})
-            WHERE toLower(start.name) = toLower($start_name)
-              AND (
-                  $start_entity_type IS NULL
-                  OR ANY(label IN labels(start) WHERE toLower(label) = toLower($start_entity_type))
-              )
-
-            MATCH (start){pattern}(target)
-            WHERE coalesce(r.user_id, $user_id) = $user_id
-              AND (size($rels) = 0 OR toLower(type(r)) IN $rels)
-              AND ($is_current IS NULL OR coalesce(r.is_current, true) = $is_current)
-
-            RETURN
-                start.name AS starting_node,
-                labels(start) AS starting_labels,
-                type(r) AS relationship_type,
-                r.memory_id AS memory_id,
-                r.memory_type AS memory_type,
-                target.name AS target_node,
-                labels(target) AS target_labels
-            """
-
-            next_nodes = []
-
-            def query_current_node(current_node):
-                return Neo4jGraph.query(
-                    query,
-                    params={
-                        "user_id": user_id,
-                        "start_name": current_node["name"],
-                        "start_entity_type": current_node["entity_type"],
-                        "rels": rels_lc,
-                        "is_current": is_current,
-                    },
-                )
-
-            # Nodes at the same hop are independent. Query them concurrently,
-            # but keep hops sequential because each hop depends on the prior one.
-            if len(current_nodes) > 1:
-                with ThreadPoolExecutor(max_workers=min(4, len(current_nodes))) as pool:
-                    results_by_node = list(pool.map(query_current_node, current_nodes))
-            else:
-                results_by_node = [query_current_node(node) for node in current_nodes]
-
-            for current_node, result in zip(current_nodes, results_by_node):
-                debug(
-                    f"Hop {hop} from {current_node['name']!r}: "
-                    f"{len(result or [])} rows"
-                )
-
-                for row in result or []:
-                    row_key = (
-                        row["starting_node"],
-                        row["relationship_type"],
-                        row["target_node"],
-                        row["memory_id"],
-                    )
-                    if row_key in seen_rows:
-                        continue
-                    seen_rows.add(row_key)
-
-                    all_results.append({
-                        "starting_node": row["starting_node"],
-                        "relationship_type": row["relationship_type"],
-                        "memory_id": row["memory_id"],
-                        "target_node": row["target_node"],
-                        "target_labels": row["target_labels"],
-                        "memory_type": row["memory_type"],
-                    })
-
-                    target_key = (row["target_node"] or "").lower()
-                    if target_key and target_key not in visited:
-                        visited.add(target_key)
-                        next_nodes.append({
-                            "name": row["target_node"],
-                            # Match by name only on later hops; labels[0] is
-                            # not reliable when nodes have several labels.
-                            "entity_type": None,
-                        })
-            current_nodes = next_nodes
-            if not current_nodes:
+    for hop in hops:
+        if not current_nodes:
+            break
+        if hop["relationship"]:
+            rels_lc = expand_relationships(hop["relationship"])
+            if not rels_lc:
+                debug("Invalid relationship " + repr(hop["relationship"]) + ", stopping.")
                 break
+        else:
+            rels_lc = []
+
+        pattern = _build_pattern(hop["direction"])
+        query = f"""
+        UNWIND $starts AS s
+        MATCH (start {{user_id: $user_id}})
+        WHERE toLower(start.name) = toLower(s.name)
+          AND (
+              s.entity_type IS NULL
+              OR ANY(label IN labels(start)
+                     WHERE toLower(label) = toLower(s.entity_type))
+          )
+        MATCH (start){pattern}(target)
+        WHERE coalesce(r.user_id, $user_id) = $user_id
+          AND (size($rels) = 0 OR toLower(type(r)) IN $rels)
+          AND ($is_current IS NULL OR coalesce(r.is_current, true) = $is_current)
+          AND target.user_id = $user_id
+        RETURN
+            s.root_id AS root_id,
+            start.name AS starting_node,
+            labels(start) AS starting_labels,
+            type(r) AS relationship_type,
+            r.memory_id AS memory_id,
+            r.memory_type AS memory_type,
+            target.name AS target_node,
+            labels(target) AS target_labels
+        LIMIT $row_limit
+        """
+        rows = Neo4jGraph.query(
+            query,
+            params={
+                "user_id": user_id,
+                "starts": current_nodes,
+                "rels": rels_lc,
+                "is_current": is_current,
+                "row_limit": MAX_GRAPH_ROWS_PER_HOP,
+            },
+        ) or []
+
+        next_nodes = []
+        for row in rows:
+            root_id = row["root_id"]
+            row_key = (
+                row.get("starting_node"),
+                row.get("relationship_type"),
+                row.get("target_node"),
+                row.get("memory_id"),
+            )
+            if row_key not in seen_rows:
+                seen_rows.add(row_key)
+                all_results.append({
+                    "starting_node": row.get("starting_node"),
+                    "relationship_type": row.get("relationship_type"),
+                    "memory_id": row.get("memory_id"),
+                    "target_node": row.get("target_node"),
+                    "target_labels": row.get("target_labels"),
+                    "memory_type": row.get("memory_type"),
+                })
+
+            target_name = row.get("target_node")
+            target_key = (target_name or "").lower()
+            if target_key and target_key not in visited_by_root.setdefault(root_id, set()):
+                visited_by_root[root_id].add(target_key)
+                next_nodes.append({
+                    "root_id": root_id,
+                    "name": target_name,
+                    "entity_type": None,
+                })
+
+        if len(rows) >= MAX_GRAPH_ROWS_PER_HOP:
+            logger.warning(
+                "Graph traversal reached the %d-row hop limit for user_id=%s",
+                MAX_GRAPH_ROWS_PER_HOP, user_id,
+            )
+        current_nodes = next_nodes
 
     return all_results
-
 
 # ---------------------------------------------------------------------------
 # Retrieval strategies
@@ -536,10 +523,18 @@ def retrieve(plan: RetrievalPlan, user_id: str):
         return semantic_retrieval(plan, user_id), "semantic"
 
     if plan.query_type == "graph":
-        results = graph_retrieval(plan, user_id)
+        # Reuse Pinecone candidates if needed to discover graph anchors; do not
+        # embed and query Pinecone a second time on graph fallback.
+        if not plan.entities:
+            candidates = Retrieval_for_Pinecone(plan, user_id)
+            anchors = _get_anchors(plan, user_id, candidates)
+            graph_results = Graph_Traversal(plan, anchors, user_id)
+            results = {"pinecone": candidates, "graph": graph_results}
+        else:
+            results = graph_retrieval(plan, user_id)
         if not results["graph"]:
             debug("Graph returned nothing, falling back to semantic.")
-            return semantic_retrieval(plan, user_id), "semantic"
+            return {"pinecone": results.get("pinecone", []), "graph": []}, "semantic"
         return results, "graph"
 
     if plan.query_type == "hybrid":
@@ -600,15 +595,15 @@ def convert_results_to_mongo_docs(results: dict, query_type: str, user_id: str):
 def _process_single_query(q_text: str, user_id: str) -> list[dict]:
     try:
         retrieval_plan = get_retrieval_plan(q_text)
-        print(f"Retrieval Plan: {retrieval_plan}")
+        logger.debug("Retrieval plan for %r: %s", q_text, retrieval_plan)
 
         results, effective_type = retrieve(retrieval_plan, user_id)
-        print(f"Results ({effective_type}): {results}\n")
+        logger.debug("Retrieval results (%s) for %r: %s", effective_type, q_text, results)
 
         return convert_results_to_mongo_docs(results, effective_type, user_id)
     except Exception as e:
         # One failing query should not kill the others.
-        print(f"Query failed ({q_text!r}): {type(e).__name__}: {e}")
+        logger.exception("Query failed (%r)", q_text)
         return []
 
 
@@ -626,7 +621,7 @@ def retrieve_memory(user_query: str, user_id: str):
         HumanMessage(content=user_query),
     ],
 )
-    print(f"Query Converter Output: {converter_response}")
+    logger.debug("Query converter output: %s", converter_response)
 
     query_texts = [q.query for q in converter_response.queries if q.query]
     if not query_texts:
@@ -651,5 +646,5 @@ def retrieve_memory(user_query: str, user_id: str):
             seen_ids.add(doc_id)
             unique_docs.append(doc["content"] if "content" in doc else doc)
 
-    print(f"Final Results: {len(unique_docs)} unique documents retrieved.\n")
+    logger.debug("Final retrieval result count: %d unique documents", len(unique_docs))
     return unique_docs
