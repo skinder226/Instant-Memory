@@ -1,4 +1,5 @@
 from bson import ObjectId
+from pymongo import UpdateOne
 from .Neo4j_connect import Neo4jGraph
 from .mongodb_connection import db
 from .vector_str import index
@@ -32,77 +33,72 @@ def _resolved_updates(placeholder_updates):
 
 
 def update_mongo_placeholders(mongo_pending_memories, placeholder_updates):
+    """Resolve all matching placeholders per memory with one read and one write."""
     resolutions = dict(_resolved_updates(placeholder_updates))
     updated = []
+    status_operations = []
 
     for memory in mongo_pending_memories:
         user_id = memory["user_id"]
-        mongo_id = memory["mongo_id"]
-        collection = db[memory["memory_type"]]
-        oid = ObjectId(mongo_id)
-
+        mongo_id = str(memory["mongo_id"])
+        collection_name = memory["memory_type"]
+        active_names = []
         for placeholder in memory.get("placeholders", []):
             name = placeholder.get("name")
-            value = resolutions.get(name)
+            if (
+                name in resolutions
+                and placeholder.get("statuses", {}).get("mongo_status") in ("pending", "error")
+            ):
+                active_names.append(name)
+        if not active_names or not ObjectId.is_valid(mongo_id):
+            continue
 
-            if placeholder.get("statuses", {}).get("mongo_status") != "pending":
-                continue
-            if not value:
-                continue
+        collection = db[collection_name]
+        oid = ObjectId(mongo_id)
+        doc = collection.find_one({"_id": oid, "user_id": user_id})
+        if not doc:
+            continue
 
-            doc = collection.find_one({"_id": oid, "user_id": user_id})
-            if not doc:
-                continue
+        content = doc.get("content") or ""
+        for name in active_names:
+            content = content.replace("(" + name + ")", resolutions[name])
 
-            content = (doc.get("content") or "").replace(f"({name})", value)
+        entities = doc.get("entities") or []
+        for entity in entities:
+            for side in ("source", "target"):
+                node = entity.get(side)
+                if isinstance(node, dict) and node.get("name") in active_names:
+                    node["name"] = resolutions[node["name"]]
 
-            result = collection.update_one(
-                {"_id": oid, "user_id": user_id},
-                [{
-                    "$set": {
-                "content": content,
-                        "entities": {
-                            "$map": {
-                                "input": {"$ifNull": ["$entities", []]},
-                                "as": "entity",
-                                "in": {
-                                    "$mergeObjects": [
-                                        "$$entity",
-                                        {
-                                            "source": {
-                                                "$cond": [
-                                                    {"$eq": ["$$entity.source.name", name]},
-                                                    {"$mergeObjects": ["$$entity.source", {"name": value}]},
-                                                    "$$entity.source",
-                                                ]
-                                            },
-                                            "target": {
-                                                "$cond": [
-                                                    {"$eq": ["$$entity.target.name", name]},
-                                                    {"$mergeObjects": ["$$entity.target", {"name": value}]},
-                                                    "$$entity.target",
-                                                ]
-                                            },
-                                        },
-                                    ]
-                                },
-                            }
-                        },
-                    }
-                }],
-            )
+        result = collection.update_one(
+            {"_id": oid, "user_id": user_id},
+            {"$set": {"content": content, "entities": entities}},
+        )
+        if not result.matched_count:
+            continue
 
+        for name in active_names:
             updated.append({
-                "mongo_id": str(mongo_id),
+                "mongo_id": mongo_id,
                 "user_id": user_id,
-                    "content": content,
+                "content": content,
                 "placeholder_name": name,
             })
+            status_operations.append(UpdateOne(
+                {"user_id": user_id, "mongo_id": mongo_id},
+                {"$set": {
+                    "placeholders.$[p].statuses.mongo_status": "completed",
+                    "placeholders.$[p].mongo_error": None,
+                }},
+                array_filters=[{
+                    "p.name": name,
+                    "p.statuses.mongo_status": {"$in": ["pending", "error"]},
+                }],
+            ))
 
-            update_status(user_id, mongo_id, "mongo", name)
-
+    if status_operations:
+        db["outbox"].bulk_write(status_operations, ordered=False)
     return updated
-
 
 def update_neo4j_placeholders(user_id, placeholder_updates, docs):
     resolutions = dict(_resolved_updates(placeholder_updates))
