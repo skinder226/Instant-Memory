@@ -61,10 +61,13 @@ def find_pending_memory(user_id):
 def get_real_memories(user_id, mongo_id, memory_type):
     if not memory_type or not mongo_id or not ObjectId.is_valid(str(mongo_id)):
         return None
-    return db[memory_type].find_one({
+    memory = db["memories"].find_one({
         "user_id": user_id,
         "_id": ObjectId(str(mongo_id)),
     })
+    if memory and memory.get("type") != memory_type:
+        return None
+    return memory
 
 
 def set_memory_status(user_id, mongo_id, db_name, status):
