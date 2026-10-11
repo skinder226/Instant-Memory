@@ -59,14 +59,40 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
     # querying all 11 collections separately for every updated memory.
     previous_by_id = {}
     if incoming_ids:
-        for memory_type in _all_memory_collections():
-            cursor = db[memory_type].find({
+        # The outbox is the memory-ID-to-collection registry, so normal updates
+        # only read the collection(s) that actually contain the prior memory.
+        refs = list(db["outbox"].find(
+            {"user_id": user_id, "memory_id": {"$in": list(incoming_ids)}},
+            {"memory_id": 1, "memory_type": 1, "mongo_id": 1},
+        ))
+        ids_by_type = {}
+        for ref in refs:
+            memory_type = ref.get("memory_type")
+            mongo_id = ref.get("mongo_id")
+            if memory_type in _all_memory_collections() and ObjectId.is_valid(str(mongo_id or "")):
+                ids_by_type.setdefault(memory_type, set()).add(ObjectId(str(mongo_id)))
+
+        found_ids = set()
+        for memory_type, mongo_ids in ids_by_type.items():
+            for old in db[memory_type].find({
+                "_id": {"$in": list(mongo_ids)},
                 "user_id": user_id,
                 "id": {"$in": list(incoming_ids)},
                 "temporal.is_current": True,
-            })
-            for old in cursor:
+            }):
                 previous_by_id.setdefault(str(old.get("id")), []).append(old)
+                found_ids.add(str(old.get("id")))
+
+        # Compatibility fallback for legacy memories that predate outbox refs.
+        missing_ids = incoming_ids - found_ids
+        if missing_ids:
+            for memory_type in _all_memory_collections():
+                for old in db[memory_type].find({
+                    "user_id": user_id,
+                    "id": {"$in": list(missing_ids)},
+                    "temporal.is_current": True,
+                }):
+                    previous_by_id.setdefault(str(old.get("id")), []).append(old)
 
     previous_updates = {}
     for old_docs in previous_by_id.values():
