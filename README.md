@@ -50,3 +50,19 @@ Run tests with:
     uv run pytest
 
 MongoDB is the source of truth. Memory writes create outbox events for background synchronization to Pinecone and Neo4j. Every memory operation is scoped by user_id.
+
+
+## LLM configuration
+
+Configure `Mem_llm_provider`, `Mem_llm_Api`, `Mem_base_url`, and
+`Mem_model` in your local `.env` file. You can optionally set
+`Mem_router_model` to a smaller/faster model supported by the same provider.
+The memory extractor continues using `Mem_model`; the decision gate, query
+converter, and retrieval planner use `Mem_router_model` when it is set.
+
+Example (replace the model name with one available to your provider):
+
+    Mem_router_model=YOUR_SMALL_ROUTER_MODEL
+
+The router model must support structured/function-calling output, because these
+calls use Pydantic schemas.
