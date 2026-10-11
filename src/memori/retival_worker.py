@@ -12,7 +12,7 @@ from .embeddings import embeddings
 from .vector_str import index
 from .Neo4j_connect import Neo4jGraph
 from .worker import invoke_with_retry
-from .mongodb_connection import db
+from .mongodb_connection import db, ensure_indexes
 
 logger = logging.getLogger(__name__)
 DEBUG = False
@@ -94,6 +94,7 @@ def user_has_memories(user_id: str) -> bool:
     Stops at the first match, so it is cheap. Create an index on user_id in
     each collection to keep it fast: db[type].create_index("user_id")"""
 
+    ensure_indexes()
     if db["outbox"].find_one({"user_id": user_id}, {"_id": 1}):
         debug(f"User {user_id!r} has memories.")
         return True
