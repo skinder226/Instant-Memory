@@ -613,7 +613,7 @@ def retrieve_memory(user_query: str, user_id: str, converter_response=None):
     # Nothing stored yet (e.g. a brand-new user): skip every LLM call,
     # Pinecone query and Neo4j query.
     if not user_has_memories(user_id):
-        print("No memories stored for this user, skipping retrieval.")
+        logger.debug("No memories stored for user_id=%s; skipping retrieval", user_id)
         return []
 
     if converter_response is None:
