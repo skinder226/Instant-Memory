@@ -54,6 +54,10 @@ def ensure_indexes(memory_types=None, include_outbox=True):
                 [("user_id", ASCENDING), ("mongo_id", ASCENDING)],
                 name="user_mongo_id_idx",
             )
+            outbox.create_index(
+                [("user_id", ASCENDING), ("memory_id", ASCENDING)],
+                name="user_memory_id_idx",
+            )
             _outbox_basic_ready = True
 
         if include_outbox is True and not _outbox_worker_ready:
