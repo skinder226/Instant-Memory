@@ -41,6 +41,7 @@ def ensure_neo4j_indexes(labels):
                 # Index DDL may be disabled for a read-only database account.
                 # Keep retrieval/writes functional, while warning that lookups
                 # may be slower until an administrator creates the index.
+                _INDEXED_LABELS.add(label)  # Avoid repeating a failing DDL request on every hop.
                 logger.warning("Could not ensure Neo4j index for label %s", label, exc_info=True)
 
 def set_memory_to_neo4j(memory, user_id):
