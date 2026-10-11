@@ -159,6 +159,10 @@ def update_pinecone_placeholders(user_id, placeholder_updates, docs):
             for doc, values in zip(batch, vectors):
                 memory_id = str(doc["mongo_id"])
                 old_vector = existing_vectors.get(memory_id)
+                if old_vector is None:
+                    raise ValueError(
+                        "Cannot resolve placeholder in missing Pinecone vector " + memory_id
+                    )
                 metadata = dict(getattr(old_vector, "metadata", None) or {})
                 metadata["content"] = doc["content"]
                 upserts.append({
