@@ -22,17 +22,12 @@ def _source_role(source: str) -> str:
     return role if role in {"user", "assistant", "tool", "system", "other"} else "other"
 
 
-def _all_memory_collections() -> list[str]:
-    return ["profile", "fact", "preference", "semantic", "episodic", "procedural",
-            "goal", "event", "task", "project", "temporal"]
-
-
 def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) -> list[tuple[str, str]]:
-    """Persist one extraction response using batched MongoDB operations."""
+    """Save all memory types to one source-of-truth collection and enqueue sync."""
     if not memories_data:
         return []
     from .mongodb_connection import ensure_indexes
-    ensure_indexes()
+    ensure_indexes(memory_types=["memories"], include_outbox=True)
 
     now = datetime.now(timezone.utc).isoformat()
     prepared = []
@@ -55,60 +50,27 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
             "placeholders": placeholders,
         })
 
-    # Query each memory collection once per extraction response, rather than
-    # querying all 11 collections separately for every updated memory.
     previous_by_id = {}
     if incoming_ids:
-        # The outbox is the memory-ID-to-collection registry, so normal updates
-        # only read the collection(s) that actually contain the prior memory.
-        refs = list(db["outbox"].find(
-            {"user_id": user_id, "memory_id": {"$in": list(incoming_ids)}},
-            {"memory_id": 1, "memory_type": 1, "mongo_id": 1},
-        ))
-        ids_by_type = {}
-        for ref in refs:
-            memory_type = ref.get("memory_type")
-            mongo_id = ref.get("mongo_id")
-            if memory_type in _all_memory_collections() and ObjectId.is_valid(str(mongo_id or "")):
-                ids_by_type.setdefault(memory_type, set()).add(ObjectId(str(mongo_id)))
+        for old in db["memories"].find({
+            "user_id": user_id,
+            "id": {"$in": list(incoming_ids)},
+            "temporal.is_current": True,
+        }):
+            previous_by_id.setdefault(str(old.get("id")), []).append(old)
 
-        found_ids = set()
-        for memory_type, mongo_ids in ids_by_type.items():
-            for old in db[memory_type].find({
-                "_id": {"$in": list(mongo_ids)},
-                "user_id": user_id,
-                "id": {"$in": list(incoming_ids)},
-                "temporal.is_current": True,
-            }):
-                previous_by_id.setdefault(str(old.get("id")), []).append(old)
-                found_ids.add(str(old.get("id")))
-
-        # Compatibility fallback for legacy memories that predate outbox refs.
-        missing_ids = incoming_ids - found_ids
-        if missing_ids:
-            for memory_type in _all_memory_collections():
-                for old in db[memory_type].find({
-                    "user_id": user_id,
-                    "id": {"$in": list(missing_ids)},
-                    "temporal.is_current": True,
-                }):
-                    previous_by_id.setdefault(str(old.get("id")), []).append(old)
-
-    previous_updates = {}
+    previous_updates = []
     for old_docs in previous_by_id.values():
         for old in old_docs:
-            previous_updates.setdefault(old["type"], []).append(
-                UpdateOne(
-                    {"_id": old["_id"], "user_id": user_id},
-                    {"$set": {"temporal.is_current": False,
-                              "temporal.valid_until": now}},
-                )
-            )
-    for memory_type, operations in previous_updates.items():
-        if operations:
-            db[memory_type].bulk_write(operations, ordered=False)
+            previous_updates.append(UpdateOne(
+                {"_id": old["_id"], "user_id": user_id},
+                {"$set": {"temporal.is_current": False,
+                          "temporal.valid_until": now}},
+            ))
+    if previous_updates:
+        db["memories"].bulk_write(previous_updates, ordered=False)
 
-    memory_docs_by_type = {}
+    memory_docs = []
     outbox_docs = []
     output_ids = []
     for item in prepared:
@@ -121,7 +83,7 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
         memory["id"] = stable_id
 
         previous = previous_by_id.get(stable_id, [])
-        memory_docs_by_type.setdefault(memory["type"], []).append(memory)
+        memory_docs.append(memory)
 
         placeholder_docs = []
         for placeholder in item["placeholders"]:
@@ -150,15 +112,11 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
         })
         output_ids.append((stable_id, mongo_id))
 
-    # Set both _id and public id before insert; no follow-up update_one needed.
-    for memory_type, documents in memory_docs_by_type.items():
-        if documents:
-            db[memory_type].insert_many(documents, ordered=True)
+    if memory_docs:
+        db["memories"].insert_many(memory_docs, ordered=True)
     if outbox_docs:
         db["outbox"].insert_many(outbox_docs, ordered=True)
-
     return output_ids
-
 
 def _save_memory_and_outbox(db: Any, memory_data: dict, user_id: str) -> tuple[str, str]:
     """Backward-compatible single-memory wrapper."""
