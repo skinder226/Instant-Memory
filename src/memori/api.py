@@ -12,6 +12,7 @@ from .mongodb_connection import ensure_indexes
 
 logger = logging.getLogger(__name__)
 _background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memori-ingest")
+_routing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori-routing")
 
 
 def _source_role(source: str) -> str:
@@ -249,6 +250,13 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                          user_id, role)
 
 
+def _log_background_future(future):
+    try:
+        future.result()
+    except Exception:
+        logger.debug("Unused parallel query-converter call failed", exc_info=True)
+
+
 def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     """Return retrieved memories synchronously; schedule extraction and saving asynchronously.
 
@@ -271,20 +279,41 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
 
     if role == "user":
         # Non-user sources never import or execute the retrieval path.
-        from .prompts import memory_decision_prompt
-        from .llms import MemoryDecisionGate
+        from .prompts import memory_decision_prompt, query_converter_prompt
+        from .llms import MemoryDecisionGate, query_converter
         from .worker import invoke_with_retry
         from .retival_worker import retrieve_memory
 
-        decision = invoke_with_retry(
+        # These two independent classifications run concurrently. The retrieval
+        # planner still runs after query conversion because it needs each
+        # converted query, but the gate no longer adds a full serial LLM wait.
+        gate_future = _routing_executor.submit(
+            invoke_with_retry,
             MemoryDecisionGate,
             [{"role": "system", "content": memory_decision_prompt},
              {"role": "user", "content": user_input}],
         )
-        # This is the only intentionally blocking part: retrieval must finish
-        # before the caller's LLM can use its results to answer.
+        converter_future = _routing_executor.submit(
+            invoke_with_retry,
+            query_converter,
+            [{"role": "system", "content": query_converter_prompt},
+             {"role": "user", "content": user_input}],
+        )
+        decision = gate_future.result()
+
+        # Retrieval must finish before the caller's LLM can use its results.
         if decision.needs_retrieval:
-            result["retrieval"] = retrieve_memory(user_query=user_input, user_id=user_id)
+            converter_response = converter_future.result()
+            result["retrieval"] = retrieve_memory(
+                user_query=user_input,
+                user_id=user_id,
+                converter_response=converter_response,
+            )
+        else:
+            # If the converter already started, consume/log its exception in
+            # the background rather than blocking a non-retrieval request.
+            if not converter_future.cancel():
+                converter_future.add_done_callback(_log_background_future)
         if not decision.needs_saving:
             return result
         saving_needs_context = bool(decision.saving_needs_context)
