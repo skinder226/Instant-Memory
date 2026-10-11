@@ -1,9 +1,11 @@
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from bson import ObjectId
+from openai import APIStatusError
 
 from .mongodb_connection import db
 from .vector_str import index
@@ -12,9 +14,13 @@ from .neo4j_learn import set_memory_to_neo4j, set_memory_to_neo4j_supersedes
 
 logger = logging.getLogger(__name__)
 
+# Separate executors prevent provider tasks from deadlocking the ingestion pool.
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memori-worker")
-_user_locks = {}
-_user_locks_guard = threading.Lock()
+_provider_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori-provider")
+# A fixed set of locks prevents the lock registry growing forever with user IDs.
+_USER_LOCKS = tuple(threading.Lock() for _ in range(64))
+MAX_PROVIDER_ATTEMPTS = 5
+PINECONE_BATCH_SIZE = 50
 
 
 def utc_now_iso():
@@ -22,16 +28,17 @@ def utc_now_iso():
 
 
 def _get_user_lock(user_id):
-    with _user_locks_guard:
-        return _user_locks.setdefault(user_id, threading.Lock())
+    return _USER_LOCKS[hash(user_id) % len(_USER_LOCKS)]
 
 
 def find_pending_memory(user_id):
     return list(db.outbox.find({
         "user_id": user_id,
         "$or": [
-            {"pinecone.status": {"$in": ["pending", "error"]}},
-            {"neo4j.status": {"$in": ["pending", "error"]}},
+            {"pinecone.status": "pending"},
+            {"pinecone.status": "error", "pinecone.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},
+            {"neo4j.status": "pending"},
+            {"neo4j.status": "error", "neo4j.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},
             {"placeholders.statuses.mongo_status": {"$in": ["pending", "error"]}},
             {"placeholders.statuses.pinecone_status": {"$in": ["pending", "error"]}},
             {"placeholders.statuses.neo4j_status": {"$in": ["pending", "error"]}},
@@ -40,7 +47,7 @@ def find_pending_memory(user_id):
 
 
 def get_real_memories(user_id, mongo_id, memory_type):
-    if not memory_type or not mongo_id:
+    if not memory_type or not mongo_id or not ObjectId.is_valid(str(mongo_id)):
         return None
     return db[memory_type].find_one({
         "user_id": user_id,
@@ -49,9 +56,9 @@ def get_real_memories(user_id, mongo_id, memory_type):
 
 
 def set_memory_status(user_id, mongo_id, db_name, status):
-    update = {"$set": {f"{db_name}.status": status}}
+    update = {"$set": {db_name + ".status": status}}
     if status == "completed":
-        update["$set"][f"{db_name}.last_error"] = None
+        update["$set"][db_name + ".last_error"] = None
     db.outbox.update_one(
         {"user_id": user_id, "mongo_id": str(mongo_id)},
         update,
@@ -63,15 +70,15 @@ def set_memory_error_or_attempts(user_id, mongo_id, db_name, last_error):
         {"user_id": user_id, "mongo_id": str(mongo_id)},
         {
             "$set": {
-                f"{db_name}.status": "error",
-                f"{db_name}.last_error": str(last_error),
+                db_name + ".status": "error",
+                db_name + ".last_error": str(last_error),
             },
-            "$inc": {f"{db_name}.attempts": 1},
+            "$inc": {db_name + ".attempts": 1},
         },
     )
 
 
-def embed_and_upsert_memory(memory):
+def _pinecone_vector(memory, values):
     temporal = memory.get("temporal") or {}
     metadata = {
         "user_id": memory["user_id"],
@@ -83,23 +90,23 @@ def embed_and_upsert_memory(memory):
     }
     if temporal.get("valid_until"):
         metadata["valid_until"] = temporal["valid_until"]
+    return {"id": str(memory["_id"]), "values": values, "metadata": metadata}
 
+
+def embed_and_upsert_memory(memory):
     values = embeddings.embed_query(memory["content"])
     index.upsert(
-        vectors=[{
-            "id": str(memory["_id"]),
-            "values": values,
-            "metadata": metadata,
-        }],
+        vectors=[_pinecone_vector(memory, values)],
         namespace=memory["user_id"],
     )
 
 
 def update_memory_pinecone(user_id, update_ids):
-    for update_id in update_ids or []:
-        if update_id:
+    ids = [str(item) for item in (update_ids or []) if item]
+    for start in range(0, len(ids), 100):
+        for update_id in ids[start:start + 100]:
             index.update(
-                id=str(update_id),
+                id=update_id,
                 namespace=user_id,
                 set_metadata={
                     "is_current": False,
@@ -109,15 +116,32 @@ def update_memory_pinecone(user_id, update_ids):
 
 
 def _process_pinecone(user_id, work_items):
-    for memory, supersedes in work_items:
-        mongo_id = memory["_id"]
+    # Batch embeddings and Pinecone upserts; individual status updates remain
+    # per outbox event so a failed item can be retried independently.
+    for start in range(0, len(work_items), PINECONE_BATCH_SIZE):
+        batch = work_items[start:start + PINECONE_BATCH_SIZE]
         try:
-            embed_and_upsert_memory(memory)
-            update_memory_pinecone(user_id, supersedes)
-            set_memory_status(user_id, mongo_id, "pinecone", "completed")
-        except Exception as e:
-            logger.exception("Pinecone failed for %s", mongo_id)
-            set_memory_error_or_attempts(user_id, mongo_id, "pinecone", e)
+            contents = [memory["content"] for memory, _ in batch]
+            embedded = embeddings.embed_documents(contents)
+            vectors = [
+                _pinecone_vector(memory, values)
+                for (memory, _), values in zip(batch, embedded)
+            ]
+            index.upsert(vectors=vectors, namespace=user_id)
+        except Exception as exc:
+            logger.exception("Pinecone batch failed for user_id=%s", user_id)
+            for memory, _ in batch:
+                set_memory_error_or_attempts(user_id, memory["_id"], "pinecone", exc)
+            continue
+
+        for memory, supersedes in batch:
+            mongo_id = memory["_id"]
+            try:
+                update_memory_pinecone(user_id, supersedes)
+                set_memory_status(user_id, mongo_id, "pinecone", "completed")
+            except Exception as exc:
+                logger.exception("Pinecone supersede update failed for %s", mongo_id)
+                set_memory_error_or_attempts(user_id, mongo_id, "pinecone", exc)
 
 
 def _process_neo4j(user_id, work_items):
@@ -127,15 +151,13 @@ def _process_neo4j(user_id, work_items):
             set_memory_to_neo4j(memory, user_id)
             set_memory_to_neo4j_supersedes(user_id, [supersedes])
             set_memory_status(user_id, mongo_id, "neo4j", "completed")
-        except Exception as e:
+        except Exception as exc:
             logger.exception("Neo4j failed for %s", mongo_id)
-            set_memory_error_or_attempts(user_id, mongo_id, "neo4j", e)
+            set_memory_error_or_attempts(user_id, mongo_id, "neo4j", exc)
 
 
 def _save_pending_memory_worker(user_id):
-    lock = _get_user_lock(user_id)
-
-    with lock:
+    with _get_user_lock(user_id):
         pending = find_pending_memory(user_id)
         pinecone_work = []
         neo4j_work = []
@@ -150,21 +172,32 @@ def _save_pending_memory_worker(user_id):
                 for provider in ("pinecone", "neo4j"):
                     if outbox.get(provider, {}).get("status") in ("pending", "error"):
                         set_memory_error_or_attempts(
-                            user_id,
-                            mongo_id,
-                            provider,
+                            user_id, mongo_id, provider,
                             "Source memory no longer exists in MongoDB",
                         )
                 continue
 
-            if outbox.get("pinecone", {}).get("status") in ("pending", "error"):
+            if outbox.get("pinecone", {}).get("status") == "pending" or (
+                outbox.get("pinecone", {}).get("status") == "error"
+                and outbox.get("pinecone", {}).get("attempts", 0) < MAX_PROVIDER_ATTEMPTS
+            ):
                 pinecone_work.append((real_memory, supersedes))
 
-            if outbox.get("neo4j", {}).get("status") in ("pending", "error"):
+            if outbox.get("neo4j", {}).get("status") == "pending" or (
+                outbox.get("neo4j", {}).get("status") == "error"
+                and outbox.get("neo4j", {}).get("attempts", 0) < MAX_PROVIDER_ATTEMPTS
+            ):
                 neo4j_work.append((real_memory, supersedes))
 
-        _process_pinecone(user_id, pinecone_work)
-        _process_neo4j(user_id, neo4j_work)
+        # These sinks are independent. Use a separate executor so waiting here
+        # cannot starve the ingestion executor that scheduled this function.
+        futures = []
+        if pinecone_work:
+            futures.append(_provider_executor.submit(_process_pinecone, user_id, pinecone_work))
+        if neo4j_work:
+            futures.append(_provider_executor.submit(_process_neo4j, user_id, neo4j_work))
+        for future in futures:
+            future.result()
 
 
 def _log_future(future):
@@ -180,24 +213,17 @@ def save_pending_memory(user_id):
     return future
 
 
-
-
-import time
-from openai import APIStatusError
-
-
 def invoke_with_retry(runnable, messages, retries=3):
+    """Retry transient 429/503 responses with bounded exponential backoff."""
     for attempt in range(retries):
         try:
             return runnable.invoke(messages)
-
-        except APIStatusError as e:
-            if e.status_code != 503 or attempt == retries - 1:
+        except APIStatusError as exc:
+            if exc.status_code not in (429, 503) or attempt == retries - 1:
                 raise
-
-            wait = 2 ** attempt
-            print(
-                f"LLM temporarily unavailable (503). "
-                f"Retrying in {wait}s..."
+            wait = min(2 ** attempt, 8)
+            logger.warning(
+                "LLM temporarily unavailable (%s); retrying in %ss",
+                exc.status_code, wait,
             )
             time.sleep(wait)
