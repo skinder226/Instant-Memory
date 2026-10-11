@@ -64,12 +64,21 @@ if mem_llm_provider in openai_compatible_providers:
         base_url=Mem_base_url,
     )
 
-
+    # Optionally route lightweight classification/planning calls through a
+    # cheaper, faster model while keeping extraction on the main model.
+    # Set Mem_router_model to a model supported by your configured provider.
+    router_model = os.getenv("Mem_router_model", Mem_model)
+    router_chat = ChatOpenAI(
+        model=router_model,
+        api_key=Mem_llm_Api,
+        temperature=0,
+        base_url=Mem_base_url,
+    )
 
 
 # Function-calling structured output makes the Pydantic schema part of the
 # model interface instead of asking the model to emit unconstrained JSON.
-query_converter = chat.with_structured_output(RetivalTypes)
+query_converter = router_chat.with_structured_output(RetivalTypes)
 memory_extractor = chat.with_structured_output(MemorySchema)
-RetrievalRouter = chat.with_structured_output(RetrievalPlan)
-MemoryDecisionGate = chat.with_structured_output(MemoryDecision)
+RetrievalRouter = router_chat.with_structured_output(RetrievalPlan)
+MemoryDecisionGate = router_chat.with_structured_output(MemoryDecision)
