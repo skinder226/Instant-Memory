@@ -28,3 +28,23 @@ def test_empty_source_is_rejected():
         pass
     else:
         raise AssertionError("Empty source should raise ValueError")
+
+
+
+def test_oversized_groq_tpm_error_is_detected():
+    from memori.api import _is_request_too_large
+
+    error = Exception(
+        "Error code: 413 - Request too large for model; tokens per minute (TPM)"
+    )
+    assert _is_request_too_large(error)
+
+
+def test_compact_extractor_prompt_is_small_and_has_core_rules():
+    from memori.api import _compact_extractor_system_message
+
+    prompt = _compact_extractor_system_message()
+    assert len(prompt) < 3000
+    assert "Analyze ONLY the latest supplied message" in prompt
+    assert "placeholder_updates" in prompt
+    assert "source_role" in prompt
