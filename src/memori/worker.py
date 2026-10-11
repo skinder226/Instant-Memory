@@ -37,15 +37,26 @@ def find_pending_memory(user_id):
         "user_id": user_id,
         "$or": [
             {"pinecone.status": "pending"},
-            {"$and": [{"pinecone.status": "error"}, {"$or": [\n                {"pinecone.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},\n                {"pinecone.attempts": {"$exists": False}},\n            ]}]},
+            {"$and": [
+                {"pinecone.status": "error"},
+                {"$or": [
+                    {"pinecone.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},
+                    {"pinecone.attempts": {"$exists": False}},
+                ]},
+            ]},
             {"neo4j.status": "pending"},
-            {"$and": [{"neo4j.status": "error"}, {"$or": [\n                {"neo4j.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},\n                {"neo4j.attempts": {"$exists": False}},\n            ]}]},
+            {"$and": [
+                {"neo4j.status": "error"},
+                {"$or": [
+                    {"neo4j.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},
+                    {"neo4j.attempts": {"$exists": False}},
+                ]},
+            ]},
             {"placeholders.statuses.mongo_status": {"$in": ["pending", "error"]}},
             {"placeholders.statuses.pinecone_status": {"$in": ["pending", "error"]}},
             {"placeholders.statuses.neo4j_status": {"$in": ["pending", "error"]}},
         ],
     }))
-
 
 def get_real_memories(user_id, mongo_id, memory_type):
     if not memory_type or not mongo_id or not ObjectId.is_valid(str(mongo_id)):
