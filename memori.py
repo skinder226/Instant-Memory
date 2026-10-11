@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 
 from rich import print
+from bson import ObjectId
 
 from src.memori.fast_context import timed, get_context_fast, build_extractor_prompt
 from src.memori.retival_worker import retrieve_memory
@@ -30,32 +31,21 @@ def Memory_Decision(user_input):
     )
 
 
-def _all_memory_collections():
-    return [
-        "profile", "fact", "preference", "semantic", "episodic",
-        "procedural", "goal", "event", "task", "project", "temporal",
-    ]
-
-
 def save_memory_and_outbox(db, memory_data, user_id):
-    """Write Mongo source-of-truth first, then create an outbox event.
-
-    Updates search every memory collection by user_id + stable memory id, so
-    changing a memory's type does not orphan its previous version.
-    """
+    """Save a memory in the unified collection and enqueue provider sync."""
     outbox = db["outbox"]
+    memory_data = dict(memory_data)
     incoming_id = memory_data.get("id")
     placeholders = memory_data.pop("placeholders", []) or []
     memory_data["user_id"] = user_id
 
     previous = []
     if incoming_id:
-        for memory_type in _all_memory_collections():
-            previous.extend(db[memory_type].find({
-                "user_id": user_id,
-                "id": incoming_id,
-                "temporal.is_current": True,
-            }))
+        previous = list(db["memories"].find({
+            "user_id": user_id,
+            "id": str(incoming_id),
+            "temporal.is_current": True,
+        }))
 
     now = datetime.now(timezone.utc).isoformat()
     memory_data.setdefault("temporal", {})
@@ -63,31 +53,21 @@ def save_memory_and_outbox(db, memory_data, user_id):
     memory_data["temporal"]["valid_until"] = None
     memory_data["temporal"]["is_current"] = True
 
-    if not incoming_id:
-        result = db[memory_data["type"]].insert_one(memory_data)
-        stable_id = str(result.inserted_id)
-    else:
-        stable_id = str(incoming_id)
+    for old in previous:
+        db["memories"].update_one(
+            {"_id": old["_id"], "user_id": user_id},
+            {"$set": {
+                "temporal.is_current": False,
+                "temporal.valid_until": now,
+            }},
+        )
 
-        for old in previous:
-            old_collection = db[old["type"]]
-            old_collection.update_one(
-                {"_id": old["_id"], "user_id": user_id},
-                {"$set": {
-                    "temporal.is_current": False,
-                    "temporal.valid_until": now,
-                }},
-            )
+    memory_data["_id"] = ObjectId()
+    stable_id = str(incoming_id) if incoming_id else str(memory_data["_id"])
+    memory_data["id"] = stable_id
+    db["memories"].insert_one(memory_data)
 
-        memory_data["id"] = stable_id
-        result = db[memory_data["type"]].insert_one(memory_data)
-
-    mongo_id = str(result.inserted_id)
-    db[memory_data["type"]].update_one(
-        {"_id": result.inserted_id, "user_id": user_id},
-        {"$set": {"id": stable_id}},
-    )
-
+    mongo_id = str(memory_data["_id"])
     placeholder_docs = []
     for placeholder in placeholders:
         item = dict(placeholder)
@@ -112,9 +92,7 @@ def save_memory_and_outbox(db, memory_data, user_id):
         "created_at": now,
         "updated_at": now,
     })
-
     return stable_id, mongo_id
-
 
 def _update_placeholder_values_in_outbox(user_id, placeholder_updates):
     now = datetime.now(timezone.utc).isoformat()
