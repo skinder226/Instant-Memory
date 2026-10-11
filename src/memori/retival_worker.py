@@ -11,6 +11,7 @@ from .schema import RetrievalPlan, ResolvedAnchor
 from .embeddings import embeddings
 from .vector_str import index
 from .Neo4j_connect import Neo4jGraph
+from .neo4j_learn import ensure_neo4j_indexes
 from .worker import invoke_with_retry
 from .mongodb_connection import db, ensure_indexes
 
@@ -260,65 +261,86 @@ def Anchor_Resolver(
     plan: RetrievalPlan,
 ) -> list[ResolvedAnchor]:
     resolved = {}
-
-    exact_query = """
-    MATCH (n {user_id: $user_id})
-    WHERE toLower(n.name) = toLower($name)
-      AND (
-          $entity_type IS NULL
-          OR ANY(label IN labels(n) WHERE toLower(label) = toLower($entity_type))
-      )
-    RETURN n
-    LIMIT 1
-    """
-
-    user_query = """
-    MATCH (n {user_id: $user_id})
-    WHERE (
-        $entity_type IS NULL
-        OR ANY(label IN labels(n) WHERE toLower(label) = toLower($entity_type))
-    )
-    RETURN n
-    LIMIT 1
-    """
+    label_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
     for entity in plan.entities:
-        if entity.name == "__current_user__":
-            # Resolve the real User node; its name is not necessarily user_id.
-            result = Neo4jGraph.query(
-                user_query,
-                params={"user_id": user_id, "entity_type": entity.entity_type},
+        entity_type = entity.entity_type
+        label = entity_type if entity_type and label_re.fullmatch(entity_type) else None
+        if label:
+            ensure_neo4j_indexes([label])
+            if entity.name == "__current_user__":
+                query = f"""
+                MATCH (n:{label} {{user_id: $user_id}})
+                RETURN n
+                LIMIT 1
+                """
+                params = {"user_id": user_id}
+                source = "user_context"
+            else:
+                query = f"""
+                MATCH (n:{label} {{user_id: $user_id}})
+                WHERE n.name = $name
+                RETURN n
+                LIMIT 1
+                """
+                params = {"user_id": user_id, "name": entity.name}
+                source = "neo4j_exact"
+                result = Neo4jGraph.query(query, params=params)
+                if not result:
+                    # Preserve case-insensitive matching as a fallback; the
+                    # normal exact path can use the (user_id, name) index.
+                    query = f"""
+                    MATCH (n:{label} {{user_id: $user_id}})
+                    WHERE toLower(n.name) = toLower($name)
+                    RETURN n
+                    LIMIT 1
+                    """
+            result = result if entity.name == "__current_user__" else (
+                result if result else Neo4jGraph.query(query, params=params)
             )
-            source = "user_context"
         else:
-            result = Neo4jGraph.query(
-                exact_query,
-                params={
-                    "user_id": user_id,
-                    "name": entity.name,
-                    "entity_type": entity.entity_type,
-                },
-            )
-            source = "neo4j_exact"
+            # Unknown entity types cannot safely be interpolated as labels.
+            if entity.name == "__current_user__":
+                query = """
+                MATCH (n {user_id: $user_id})
+                WHERE $entity_type IS NULL
+                   OR ANY(label IN labels(n) WHERE toLower(label) = toLower($entity_type))
+                RETURN n LIMIT 1
+                """
+                params = {"user_id": user_id, "entity_type": entity_type}
+                source = "user_context"
+            else:
+                query = """
+                MATCH (n {user_id: $user_id})
+                WHERE toLower(n.name) = toLower($name)
+                  AND ($entity_type IS NULL OR
+                       ANY(label IN labels(n) WHERE toLower(label) = toLower($entity_type)))
+                RETURN n LIMIT 1
+                """
+                params = {
+                    "user_id": user_id, "name": entity.name,
+                    "entity_type": entity_type,
+                }
+                source = "neo4j_exact"
+            result = Neo4jGraph.query(query, params=params)
 
         if not result:
             debug(
                 f"Anchor NOT found: name={entity.name!r} "
-                f"type={entity.entity_type!r} user_id={user_id!r}"
+                f"type={entity_type!r} user_id={user_id!r}"
             )
             continue
 
         node = result[0]["n"]
         anchor = ResolvedAnchor(
             name=node["name"],
-            entity_type=entity.entity_type,
+            entity_type=entity_type,
             user_id=user_id,
             source=source,
         )
         resolved[(anchor.name.lower(), (anchor.entity_type or "").lower())] = anchor
 
     return list(resolved.values())
-
 
 # ---------------------------------------------------------------------------
 # Graph traversal
