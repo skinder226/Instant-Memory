@@ -37,9 +37,9 @@ def find_pending_memory(user_id):
         "user_id": user_id,
         "$or": [
             {"pinecone.status": "pending"},
-            {"pinecone.status": "error", "pinecone.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},
+            {"$and": [{"pinecone.status": "error"}, {"$or": [\n                {"pinecone.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},\n                {"pinecone.attempts": {"$exists": False}},\n            ]}]},
             {"neo4j.status": "pending"},
-            {"neo4j.status": "error", "neo4j.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},
+            {"$and": [{"neo4j.status": "error"}, {"$or": [\n                {"neo4j.attempts": {"$lt": MAX_PROVIDER_ATTEMPTS}},\n                {"neo4j.attempts": {"$exists": False}},\n            ]}]},
             {"placeholders.statuses.mongo_status": {"$in": ["pending", "error"]}},
             {"placeholders.statuses.pinecone_status": {"$in": ["pending", "error"]}},
             {"placeholders.statuses.neo4j_status": {"$in": ["pending", "error"]}},
