@@ -1,5 +1,6 @@
 import re
 from datetime import datetime, timezone
+import threading
 from dotenv import load_dotenv
 from .Neo4j_connect import Neo4jGraph
 
@@ -17,6 +18,22 @@ def _safe_labels(labels):
         raise ValueError(f"Invalid Neo4j label(s): {labels!r}")
     return ":".join(labels)
 
+
+
+_INDEXED_LABELS = set()
+_INDEX_LOCK = threading.Lock()
+
+
+def ensure_neo4j_indexes(labels):
+    """Ensure composite lookup indexes for labels used by this memory graph."""
+    safe_labels = sorted({str(label) for label in (labels or []) if _LABEL_RE.fullmatch(str(label))})
+    with _INDEX_LOCK:
+        for label in safe_labels:
+            if label in _INDEXED_LABELS:
+                continue
+            query = "CREATE INDEX idx_user_name_" + label + " IF NOT EXISTS FOR (n:" + label + ") ON (n.user_id, n.name)"
+            Neo4jGraph.query(query)
+            _INDEXED_LABELS.add(label)
 
 def set_memory_to_neo4j(memory, user_id):
     """Write graph edges in batches grouped by safe labels and relationship type."""
@@ -36,6 +53,7 @@ def set_memory_to_neo4j(memory, user_id):
 
         source_labels = _safe_labels(source.get("type"))
         target_labels = _safe_labels(target.get("type"))
+        ensure_neo4j_indexes(source_labels.split(":") + target_labels.split(":"))
         source_name = user_id if source["name"].lower() == "user" else source["name"]
         target_name = user_id if target["name"].lower() == "user" else target["name"]
 
