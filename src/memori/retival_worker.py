@@ -41,7 +41,7 @@ SOCIAL = [
     "parent_of",
 ]
 
-MAX_HOPS_CAP = 3
+MAX_HOPS_CAP = 6
 
 
 
