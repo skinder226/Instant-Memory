@@ -146,8 +146,12 @@ def build_extractor_prompt(
     pending_placeholders: list,
 ) -> str:
     """Always includes BOTH the context and the pending placeholders."""
+    # Keep the large, stable system prompt byte-for-byte unchanged so
+    # provider prompt caching can reuse its prefix across calls. Put dynamic
+    # values after the stable instructions instead of replacing text in them.
     return (
-        system_message.replace("__CURRENT_DATETIME__", current_time)
+        system_message
+        + f"\n\nRuntime metadata (use for new valid_from timestamps): {current_time}"
         + f"\nuser_id: {user_id}"
         + f"\n\nContext: {context}"
         + f"\n\nPending placeholders: {pending_placeholders}"
