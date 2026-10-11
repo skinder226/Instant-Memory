@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from openai import APIStatusError
 
-from .mongodb_connection import db
+from .mongodb_connection import db, ensure_indexes
 from .vector_str import index
 from .embeddings import embeddings
 from .neo4j_learn import set_memory_to_neo4j, set_memory_to_neo4j_supersedes
@@ -32,6 +32,7 @@ def _get_user_lock(user_id):
 
 
 def find_pending_memory(user_id):
+    ensure_indexes()
     return list(db.outbox.find({
         "user_id": user_id,
         "$or": [
