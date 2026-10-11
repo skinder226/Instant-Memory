@@ -94,7 +94,7 @@ def user_has_memories(user_id: str) -> bool:
     Stops at the first match, so it is cheap. Create an index on user_id in
     each collection to keep it fast: db[type].create_index("user_id")"""
 
-    ensure_indexes(memory_types=[], include_outbox=True)
+    ensure_indexes(memory_types=[], include_outbox="basic")
     if db["outbox"].find_one({"user_id": user_id}, {"_id": 1}):
         debug(f"User {user_id!r} has memories.")
         return True
