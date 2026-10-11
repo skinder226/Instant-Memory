@@ -1,18 +1,11 @@
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import logging
 
 from .mongodb_connection import db, ensure_indexes
 
 logger = logging.getLogger(__name__)
-_CONTEXT_EXECUTOR = ThreadPoolExecutor(max_workers=11, thread_name_prefix="memori-context")
-
-MEMORY_TYPES = [
-    "profile", "fact", "preference", "semantic", "episodic",
-    "procedural", "goal", "event", "task", "project", "temporal",
-]
 
 PLACEHOLDER_RE = re.compile(r"\((user_[a-z][a-z0-9_]*)\)")
 
@@ -39,19 +32,32 @@ def timed(label: str):
 # ---------------------------------------------------------------------------
 # Context for SAVING (no LLM calls)
 # ---------------------------------------------------------------------------
-def _find_current_docs(memory_type: str, user_id: str) -> list[dict]:
-    ensure_indexes(memory_types=[memory_type], include_outbox=False)
-    return list(
-        db[memory_type]
-        .find({
-            "user_id": user_id,
-            "temporal.is_current": True,
-            "temporal.valid_until": None,
-        })
-        .sort("temporal.valid_from", -1)
-        .limit(MAX_CONTEXT_DOCS)
+def _find_current_docs(user_id: str) -> list[dict]:
+    ensure_indexes(memory_types=["memories"], include_outbox=False)
+    current_filter = {
+        "user_id": user_id,
+        "temporal.is_current": True,
+        "temporal.valid_until": None,
+    }
+    placeholder_pattern = r"\(user_[a-z][a-z0-9_]*\)"
+    pending = list(
+        db["memories"].find({
+            **current_filter,
+            "content": {"$regex": placeholder_pattern},
+        }).sort("temporal.valid_from", -1).limit(MAX_CONTEXT_DOCS)
     )
-
+    pending_ids = [doc["_id"] for doc in pending]
+    remaining = MAX_CONTEXT_DOCS - len(pending)
+    recent = []
+    if remaining > 0:
+        recent = list(
+            db["memories"].find({
+                **current_filter,
+                "_id": {"$nin": pending_ids},
+                "content": {"$not": {"$regex": placeholder_pattern}},
+            }).sort("temporal.valid_from", -1).limit(remaining)
+        )
+    return pending + recent
 
 def _compact_node(node):
     if not isinstance(node, dict):
@@ -95,7 +101,7 @@ def get_context_fast(user_id: str) -> dict:
     """Load the user's CURRENT memories straight from MongoDB.
 
     - No LLM calls (skips the query converter and the router).
-    - 11 collections are queried in parallel.
+    - The unified memories collection is queried directly.
     - Mongo is the source of truth and is always up to date, while Pinecone
       and Neo4j are filled later by your outbox worker.
     - Pending placeholders are read directly from the content, so P9 never
@@ -105,9 +111,7 @@ def get_context_fast(user_id: str) -> dict:
     Pinecone top_k search on the message embedding (still no LLM needed).
     """
     with timed("load context from MongoDB"):
-        per_type = list(_CONTEXT_EXECUTOR.map(lambda t: _find_current_docs(t, user_id), MEMORY_TYPES))
-
-    docs = [d for group in per_type for d in group]
+        docs = _find_current_docs(user_id)
 
     pending, seen = [], set()
     pending_docs, other_docs = [], []
