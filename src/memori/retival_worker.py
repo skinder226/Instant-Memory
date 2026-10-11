@@ -377,13 +377,14 @@ def Graph_Traversal(
     resolved_anchors: list[ResolvedAnchor],
     user_id: str,
 ) -> list[dict]:
-    """Traverse one hop at a time, batching every frontier into one Cypher query."""
+    """Batch each hop by start-node label and cap returned graph rows."""
     is_current = plan.is_current
     hops = _build_hops(plan)
     all_results = []
     seen_rows = set()
     visited_by_root = {}
     current_nodes = []
+    label_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
     for root_id, anchor in enumerate(resolved_anchors):
         visited_by_root[root_id] = {anchor.name.lower()}
@@ -405,41 +406,56 @@ def Graph_Traversal(
             rels_lc = []
 
         pattern = _build_pattern(hop["direction"])
-        query = f"""
-        UNWIND $starts AS s
-        MATCH (start {{user_id: $user_id}})
-        WHERE toLower(start.name) = toLower(s.name)
-          AND (
-              s.entity_type IS NULL
-              OR ANY(label IN labels(start)
-                     WHERE toLower(label) = toLower(s.entity_type))
-          )
-        MATCH (start){pattern}(target)
-        WHERE coalesce(r.user_id, $user_id) = $user_id
-          AND (size($rels) = 0 OR toLower(type(r)) IN $rels)
-          AND ($is_current IS NULL OR coalesce(r.is_current, true) = $is_current)
-          AND target.user_id = $user_id
-        RETURN
-            s.root_id AS root_id,
-            start.name AS starting_node,
-            labels(start) AS starting_labels,
-            type(r) AS relationship_type,
-            r.memory_id AS memory_id,
-            r.memory_type AS memory_type,
-            target.name AS target_node,
-            labels(target) AS target_labels
-        LIMIT $row_limit
-        """
-        rows = Neo4jGraph.query(
-            query,
-            params={
-                "user_id": user_id,
-                "starts": current_nodes,
-                "rels": rels_lc,
-                "is_current": is_current,
-                "row_limit": MAX_GRAPH_ROWS_PER_HOP,
-            },
-        ) or []
+        grouped_starts = {}
+        for node in current_nodes:
+            label = node.get("entity_type")
+            if not label or not label_re.fullmatch(label):
+                label = None
+            grouped_starts.setdefault(label, []).append(node)
+
+        rows = []
+        for label, starts in grouped_starts.items():
+            remaining = MAX_GRAPH_ROWS_PER_HOP - len(rows)
+            if remaining <= 0:
+                break
+            if label:
+                ensure_neo4j_indexes([label])
+                match_start = "MATCH (start:" + label + " {user_id: $user_id})"
+                name_filter = "start.name = s.name"
+            else:
+                match_start = "MATCH (start {user_id: $user_id})"
+                name_filter = "toLower(start.name) = toLower(s.name)"
+
+            query = f"""
+            UNWIND $starts AS s
+            {match_start}
+            WHERE {name_filter}
+            MATCH (start){pattern}(target)
+            WHERE coalesce(r.user_id, $user_id) = $user_id
+              AND (size($rels) = 0 OR toLower(type(r)) IN $rels)
+              AND ($is_current IS NULL OR coalesce(r.is_current, true) = $is_current)
+              AND target.user_id = $user_id
+            RETURN
+                s.root_id AS root_id,
+                start.name AS starting_node,
+                labels(start) AS starting_labels,
+                type(r) AS relationship_type,
+                r.memory_id AS memory_id,
+                r.memory_type AS memory_type,
+                target.name AS target_node,
+                labels(target) AS target_labels
+            LIMIT $row_limit
+            """
+            rows.extend(Neo4jGraph.query(
+                query,
+                params={
+                    "user_id": user_id,
+                    "starts": starts,
+                    "rels": rels_lc,
+                    "is_current": is_current,
+                    "row_limit": remaining,
+                },
+            ) or [])
 
         next_nodes = []
         for row in rows:
@@ -465,10 +481,12 @@ def Graph_Traversal(
             target_key = (target_name or "").lower()
             if target_key and target_key not in visited_by_root.setdefault(root_id, set()):
                 visited_by_root[root_id].add(target_key)
+                target_labels = row.get("target_labels") or []
+                target_type = target_labels[0] if target_labels else None
                 next_nodes.append({
                     "root_id": root_id,
                     "name": target_name,
-                    "entity_type": None,
+                    "entity_type": target_type,
                 })
 
         if len(rows) >= MAX_GRAPH_ROWS_PER_HOP:
