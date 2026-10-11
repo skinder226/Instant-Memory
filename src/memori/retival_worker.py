@@ -84,19 +84,17 @@ def get_mongo_doc_from_memory_id(memory_id, memory_type, user_id):
         return None
     if memory_type not in VALID_MEMORY_TYPES:
         return None
-    return db[memory_type].find_one({
+    memory = db["memories"].find_one({
         "_id": ObjectId(str(memory_id)),
         "user_id": user_id,
     })
+    return memory if memory and memory.get("type") == memory_type else None
 
 
 def user_has_memories(user_id: str) -> bool:
-    """True if the user has at least one memory document in ANY collection.
-    Stops at the first match, so it is cheap. Create an index on user_id in
-    each collection to keep it fast: db[type].create_index("user_id")"""
-
+    """True if the user has a memory document or an outbox record."""
     ensure_indexes(memory_types=[], include_outbox="basic")
-    if db["outbox"].find_one({"user_id": user_id}, {"_id": 1}):
+    if db["memories"].find_one({"user_id": user_id}, {"_id": 1}) or db["outbox"].find_one({"user_id": user_id}, {"_id": 1}):
         debug(f"User {user_id!r} has memories.")
         return True
     debug(f"User {user_id!r} has NO memories in MongoDB.")
@@ -176,21 +174,22 @@ def Anchor_from_Pinecone(
 
     # Fetch candidate memories in batches instead of one MongoDB round trip
     # per Pinecone match.
-    grouped_ids = {}
+    ids_by_type = {}
     for result in results[:top_k]:
         memory_type = result["metadata"].get("memory_type")
         memory_id = result.get("memory_id")
         if memory_type not in VALID_MEMORY_TYPES or not ObjectId.is_valid(str(memory_id or "")):
             continue
-        grouped_ids.setdefault(memory_type, set()).add(ObjectId(str(memory_id)))
+        ids_by_type.setdefault(memory_type, set()).add(ObjectId(str(memory_id)))
 
+    all_ids = set().union(*ids_by_type.values()) if ids_by_type else set()
     docs_by_key = {}
-    for memory_type, ids in grouped_ids.items():
-        for doc in db[memory_type].find(
-            {"_id": {"$in": list(ids)}, "user_id": user_id},
-            {"entities": 1},
+    if all_ids:
+        for doc in db["memories"].find(
+            {"_id": {"$in": list(all_ids)}, "user_id": user_id},
+            {"entities": 1, "type": 1},
         ):
-            docs_by_key[(memory_type, str(doc["_id"]))] = doc
+            docs_by_key[(doc.get("type"), str(doc["_id"]))] = doc
 
     pairs = {}
     for result in results[:top_k]:
@@ -620,11 +619,11 @@ def convert_results_to_mongo_docs(results: dict, query_type: str, user_id: str):
         for r in results.get("graph", []):
             refs.append((r.get("memory_id"), r.get("memory_type")))
 
-    # Deduplicate first, then fetch all matching memories with one query per
-    # memory collection rather than one network round trip per result.
+    # ObjectIds are preserved during migration, so fetch all memory types
+    # in one query against the unified source-of-truth collection.
     unique_refs = []
     seen = set()
-    grouped_ids = {}
+    all_ids = set()
     for memory_id, memory_type in refs:
         if not memory_id or memory_type not in VALID_MEMORY_TYPES:
             continue
@@ -633,14 +632,14 @@ def convert_results_to_mongo_docs(results: dict, query_type: str, user_id: str):
             continue
         seen.add(key)
         unique_refs.append(key)
-        grouped_ids.setdefault(memory_type, set()).add(ObjectId(str(memory_id)))
+        all_ids.add(ObjectId(str(memory_id)))
 
     docs_by_key = {}
-    for memory_type, ids in grouped_ids.items():
-        for doc in db[memory_type].find(
-            {"_id": {"$in": list(ids)}, "user_id": user_id}
+    if all_ids:
+        for doc in db["memories"].find(
+            {"_id": {"$in": list(all_ids)}, "user_id": user_id}
         ):
-            docs_by_key[(str(doc["_id"]), memory_type)] = doc
+            docs_by_key[(str(doc["_id"]), doc.get("type"))] = doc
 
     final_docs = []
     for memory_id, memory_type in unique_refs:
