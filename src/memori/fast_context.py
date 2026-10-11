@@ -2,8 +2,12 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+import logging
 
 from .mongodb_connection import db
+
+logger = logging.getLogger(__name__)
+_CONTEXT_EXECUTOR = ThreadPoolExecutor(max_workers=11, thread_name_prefix="memori-context")
 
 MEMORY_TYPES = [
     "profile", "fact", "preference", "semantic", "episodic",
@@ -29,7 +33,7 @@ def timed(label: str):
     try:
         yield
     finally:
-        print(f"TIMING: {label}: {time.perf_counter() - start:.2f}s")
+        logger.debug("TIMING %s: %.3fs", label, time.perf_counter() - start)
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +103,8 @@ def get_context_fast(user_id: str) -> dict:
     If a user's store grows far beyond MAX_CONTEXT_DOCS, switch this to a
     Pinecone top_k search on the message embedding (still no LLM needed).
     """
-    with ThreadPoolExecutor(max_workers=len(MEMORY_TYPES)) as pool:
-        per_type = list(pool.map(lambda t: _find_current_docs(t, user_id), MEMORY_TYPES))
+    with timed("load context from MongoDB"):
+        per_type = list(_CONTEXT_EXECUTOR.map(lambda t: _find_current_docs(t, user_id), MEMORY_TYPES))
 
     docs = [d for group in per_type for d in group]
 
