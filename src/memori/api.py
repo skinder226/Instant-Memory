@@ -8,7 +8,6 @@ from typing import Any
 
 from bson import ObjectId
 from pymongo import UpdateOne
-from .mongodb_connection import ensure_indexes
 
 logger = logging.getLogger(__name__)
 _background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memori-ingest")
@@ -32,6 +31,7 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
     """Persist one extraction response using batched MongoDB operations."""
     if not memories_data:
         return []
+    from .mongodb_connection import ensure_indexes
     ensure_indexes()
 
     now = datetime.now(timezone.utc).isoformat()
