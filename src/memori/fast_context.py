@@ -40,6 +40,7 @@ def timed(label: str):
 # Context for SAVING (no LLM calls)
 # ---------------------------------------------------------------------------
 def _find_current_docs(memory_type: str, user_id: str) -> list[dict]:
+    ensure_indexes(memory_types=[memory_type], include_outbox=False)
     return list(
         db[memory_type]
         .find({
@@ -103,7 +104,6 @@ def get_context_fast(user_id: str) -> dict:
     If a user's store grows far beyond MAX_CONTEXT_DOCS, switch this to a
     Pinecone top_k search on the message embedding (still no LLM needed).
     """
-    ensure_indexes()
     with timed("load context from MongoDB"):
         per_type = list(_CONTEXT_EXECUTOR.map(lambda t: _find_current_docs(t, user_id), MEMORY_TYPES))
 
