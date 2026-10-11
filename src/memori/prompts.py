@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from .schema import ALLOWED_RELATIONSHIPS
-current_datetime = "__CURRENT_DATETIME__"
+current_datetime = "RUNTIME_TIMESTAMP"
 from typing import get_args
 from .schema import ALLOWED_RELATIONSHIPS
 
