@@ -1,6 +1,7 @@
 import re
 from datetime import datetime, timezone
 import threading
+import logging
 from dotenv import load_dotenv
 from .Neo4j_connect import Neo4jGraph
 
@@ -21,6 +22,7 @@ def _safe_labels(labels):
 
 
 _INDEXED_LABELS = set()
+logger = logging.getLogger(__name__)
 _INDEX_LOCK = threading.Lock()
 
 
@@ -32,8 +34,14 @@ def ensure_neo4j_indexes(labels):
             if label in _INDEXED_LABELS:
                 continue
             query = "CREATE INDEX idx_user_name_" + label + " IF NOT EXISTS FOR (n:" + label + ") ON (n.user_id, n.name)"
-            Neo4jGraph.query(query)
-            _INDEXED_LABELS.add(label)
+            try:
+                Neo4jGraph.query(query)
+                _INDEXED_LABELS.add(label)
+            except Exception:
+                # Index DDL may be disabled for a read-only database account.
+                # Keep retrieval/writes functional, while warning that lookups
+                # may be slower until an administrator creates the index.
+                logger.warning("Could not ensure Neo4j index for label %s", label, exc_info=True)
 
 def set_memory_to_neo4j(memory, user_id):
     """Write graph edges in batches grouped by safe labels and relationship type."""
