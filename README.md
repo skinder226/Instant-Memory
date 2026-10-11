@@ -49,7 +49,21 @@ Run tests with:
 
     uv run pytest
 
-MongoDB is the source of truth. Memory writes create outbox events for background synchronization to Pinecone and Neo4j. Every memory operation is scoped by user_id.
+MongoDB is the source of truth. All memory types (profile, fact, preference, semantic, episodic, procedural, goal, event, task, project, and temporal) are stored as documents in one **memories collection**. The document's `type` field identifies its category. The separate `outbox` collection tracks Pinecone and Neo4j synchronization state and retry information. Completed outbox records are retained.
+
+### Migrate an existing database
+
+Back up MongoDB first, then run the migration from the repository root:
+
+    uv run python scripts/migrate_memory_collections.py
+
+The script copies the 11 legacy collections into `memories`, preserves each MongoDB `_id` so existing outbox/Pinecone/Neo4j references remain valid, and verifies the copied records. It is safe to rerun. The old collections are retained by default.
+
+After checking the application and confirming the migration, you may optionally remove the old collections:
+
+    uv run python scripts/migrate_memory_collections.py --drop-legacy
+
+The script requires you to type `DROP` before it removes those collections. Do not use that option until you have a verified backup.
 
 
 ## LLM configuration
