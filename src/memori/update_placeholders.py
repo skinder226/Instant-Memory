@@ -138,36 +138,42 @@ def update_neo4j_placeholders(user_id, placeholder_updates, docs):
 
 def update_pinecone_placeholders(user_id, placeholder_updates, docs):
     resolutions = dict(_resolved_updates(placeholder_updates))
+    pending = []
+    for doc in docs:
+        name = doc.get("placeholder_name")
+        if name in resolutions and doc.get("content"):
+            pending.append(doc)
 
-    try:
-        for doc in docs:
-            name = doc["placeholder_name"]
-            if name not in resolutions:
-                continue
-
-            content = doc.get("content", "")
-            if not content:
-                continue
-
-            values = embeddings.embed_query(content)
-            index.update(
-                id=str(doc["mongo_id"]),
-                values=values,
-                set_metadata={"content": content},
-                namespace=user_id,
-            )
-            update_status(user_id, doc["mongo_id"], "pinecone", name)
-
-    except Exception as e:
-        for doc in docs:
-            name = doc.get("placeholder_name")
-            if name:
+    # Pinecone update is one-vector-at-a-time. Fetch existing metadata in
+    # batches and upsert vectors in batches so all metadata is preserved.
+    batch_size = 50
+    for start in range(0, len(pending), batch_size):
+        batch = pending[start:start + batch_size]
+        ids = [str(doc["mongo_id"]) for doc in batch]
+        try:
+            contents = [doc["content"] for doc in batch]
+            vectors = embeddings.embed_documents(contents)
+            existing = index.fetch(ids=ids, namespace=user_id)
+            existing_vectors = getattr(existing, "vectors", {}) or {}
+            upserts = []
+            for doc, values in zip(batch, vectors):
+                memory_id = str(doc["mongo_id"])
+                old_vector = existing_vectors.get(memory_id)
+                metadata = dict(getattr(old_vector, "metadata", None) or {})
+                metadata["content"] = doc["content"]
+                upserts.append({
+                    "id": memory_id,
+                    "values": values,
+                    "metadata": metadata,
+                })
+            if upserts:
+                index.upsert(vectors=upserts, namespace=user_id)
+            for doc in batch:
+                update_status(user_id, doc["mongo_id"], "pinecone", doc["placeholder_name"])
+        except Exception as exc:
+            for doc in batch:
                 update_status(
-                    user_id,
-                    doc["mongo_id"],
-                    "pinecone",
-                    name,
-                    "error",
-                    str(e),
+                    user_id, doc["mongo_id"], "pinecone",
+                    doc["placeholder_name"], "error", str(exc),
                 )
-        raise
+            raise
