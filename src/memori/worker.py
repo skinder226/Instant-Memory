@@ -32,7 +32,7 @@ def _get_user_lock(user_id):
 
 
 def find_pending_memory(user_id):
-    ensure_indexes()
+    ensure_indexes(memory_types=[], include_outbox=True)
     return list(db.outbox.find({
         "user_id": user_id,
         "$or": [
