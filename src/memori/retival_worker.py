@@ -209,34 +209,54 @@ def Anchor_from_Pinecone(
                 if not node_name:
                     continue
 
-                node_types_lc = [t.lower() for t in _normalize_types(node.get("type"))]
+                node_types = _normalize_types(node.get("type"))
+                node_types_lc = [t.lower() for t in node_types]
 
                 if anchor_type_lc and anchor_type_lc not in node_types_lc:
                     continue
 
                 pairs[node_name.lower()] = {
                     "name": node_name,
-                    "types": [anchor_type_lc] if anchor_type_lc else node_types_lc,
+                    "types": [anchor_type] if anchor_type else node_types,
                 }
 
     if not pairs:
         return []
 
-    query = """
-    UNWIND $pairs AS p
-    MATCH (n {user_id: $user_id})
-    WHERE toLower(n.name) = toLower(p.name)
-      AND (
-          size(p.types) = 0
-          OR ANY(label IN labels(n) WHERE toLower(label) IN p.types)
-      )
-    RETURN n, labels(n) AS node_labels
-    """
+    label_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    pairs_by_label = {}
+    for pair in pairs.values():
+        types = pair.get("types") or []
+        label = types[0] if types and label_re.fullmatch(types[0]) else None
+        pairs_by_label.setdefault(label, []).append(pair)
 
-    neo4j_result = Neo4jGraph.query(
-        query,
-        params={"user_id": user_id, "pairs": list(pairs.values())},
-    )
+    neo4j_result = []
+    for label, label_pairs in pairs_by_label.items():
+        if label:
+            ensure_neo4j_indexes([label])
+            query = f"""
+            UNWIND $pairs AS p
+            MATCH (n:{label} {{user_id: $user_id}})
+            WHERE n.name = p.name
+            RETURN n, labels(n) AS node_labels
+            LIMIT $row_limit
+            """
+        else:
+            query = """
+            UNWIND $pairs AS p
+            MATCH (n {user_id: $user_id})
+            WHERE toLower(n.name) = toLower(p.name)
+            RETURN n, labels(n) AS node_labels
+            LIMIT $row_limit
+            """
+        neo4j_result.extend(Neo4jGraph.query(
+            query,
+            params={
+                "user_id": user_id,
+                "pairs": label_pairs,
+                "row_limit": top_k,
+            },
+        ) or [])
 
     unique = {}
     for row in neo4j_result or []:
