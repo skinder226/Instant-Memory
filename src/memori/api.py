@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
+from bson import ObjectId
+from pymongo import UpdateOne
+
 logger = logging.getLogger(__name__)
 _background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memori-ingest")
 
@@ -23,65 +26,114 @@ def _all_memory_collections() -> list[str]:
             "goal", "event", "task", "project", "temporal"]
 
 
-def _save_memory_and_outbox(db: Any, memory_data: dict, user_id: str) -> tuple[str, str]:
-    incoming_id = memory_data.get("id")
-    placeholders = memory_data.pop("placeholders", []) or []
-    memory_data["user_id"] = user_id
-    previous = []
-    if incoming_id:
-        for memory_type in _all_memory_collections():
-            previous.extend(db[memory_type].find({
-                "user_id": user_id, "id": incoming_id, "temporal.is_current": True,
-            }))
+def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) -> list[tuple[str, str]]:
+    """Persist one extraction response using batched MongoDB operations."""
+    if not memories_data:
+        return []
 
     now = datetime.now(timezone.utc).isoformat()
-    temporal = memory_data.setdefault("temporal", {}) or {}
-    temporal["valid_from"] = temporal.get("valid_from") or now
-    temporal["valid_until"] = None
-    temporal["is_current"] = True
-    memory_data["temporal"] = temporal
+    prepared = []
+    incoming_ids = set()
+    for raw in memories_data:
+        memory = dict(raw)
+        placeholders = memory.pop("placeholders", []) or []
+        memory["user_id"] = user_id
+        incoming_id = memory.get("id")
+        if incoming_id:
+            incoming_ids.add(str(incoming_id))
+        temporal = dict(memory.get("temporal") or {})
+        temporal["valid_from"] = temporal.get("valid_from") or now
+        temporal["valid_until"] = None
+        temporal["is_current"] = True
+        memory["temporal"] = temporal
+        prepared.append({
+            "memory": memory,
+            "incoming_id": str(incoming_id) if incoming_id else None,
+            "placeholders": placeholders,
+        })
 
-    stable_id = str(incoming_id) if incoming_id else ""
-    for old in previous:
-        db[old["type"]].update_one(
-            {"_id": old["_id"], "user_id": user_id},
-            {"$set": {"temporal.is_current": False, "temporal.valid_until": now}},
-        )
-    if stable_id:
-        memory_data["id"] = stable_id
+    # Query each memory collection once per extraction response, rather than
+    # querying all 11 collections separately for every updated memory.
+    previous_by_id = {}
+    if incoming_ids:
+        for memory_type in _all_memory_collections():
+            cursor = db[memory_type].find({
+                "user_id": user_id,
+                "id": {"$in": list(incoming_ids)},
+                "temporal.is_current": True,
+            })
+            for old in cursor:
+                previous_by_id.setdefault(str(old.get("id")), []).append(old)
 
-    inserted = db[memory_data["type"]].insert_one(memory_data)
-    mongo_id = str(inserted.inserted_id)
-    if not stable_id:
-        stable_id = mongo_id
-    db[memory_data["type"]].update_one(
-        {"_id": inserted.inserted_id, "user_id": user_id},
-        {"$set": {"id": stable_id}},
-    )
+    previous_updates = {}
+    for old_docs in previous_by_id.values():
+        for old in old_docs:
+            previous_updates.setdefault(old["type"], []).append(
+                UpdateOne(
+                    {"_id": old["_id"], "user_id": user_id},
+                    {"$set": {"temporal.is_current": False,
+                              "temporal.valid_until": now}},
+                )
+            )
+    for memory_type, operations in previous_updates.items():
+        if operations:
+            db[memory_type].bulk_write(operations, ordered=False)
 
-    placeholder_docs = []
-    for placeholder in placeholders:
-        item = dict(placeholder)
-        item["statuses"] = {
-            "mongo_status": "pending", "pinecone_status": "pending", "neo4j_status": "pending",
-        }
-        placeholder_docs.append(item)
+    memory_docs_by_type = {}
+    outbox_docs = []
+    output_ids = []
+    for item in prepared:
+        memory = item["memory"]
+        stable_id = item["incoming_id"]
+        mongo_oid = ObjectId()
+        if not stable_id:
+            stable_id = str(mongo_oid)
+        memory["_id"] = mongo_oid
+        memory["id"] = stable_id
 
-    db["outbox"].insert_one({
-        "event_id": mongo_id,
-        "event_type": "MEMORY_UPDATED" if previous else "MEMORY_CREATED",
-        "memory_type": memory_data["type"],
-        "memory_id": stable_id,
-        "mongo_id": mongo_id,
-        "user_id": user_id,
-        "supersedes_memory_ids": [str(old["_id"]) for old in previous],
-        "placeholders": placeholder_docs,
-        "pinecone": {"status": "pending", "attempts": 0, "last_error": None},
-        "neo4j": {"status": "pending", "attempts": 0, "last_error": None},
-        "created_at": now,
-        "updated_at": now,
-    })
-    return stable_id, mongo_id
+        previous = previous_by_id.get(stable_id, [])
+        memory_docs_by_type.setdefault(memory["type"], []).append(memory)
+
+        placeholder_docs = []
+        for placeholder in item["placeholders"]:
+            p = dict(placeholder)
+            p["statuses"] = {
+                "mongo_status": "pending",
+                "pinecone_status": "pending",
+                "neo4j_status": "pending",
+            }
+            placeholder_docs.append(p)
+
+        mongo_id = str(mongo_oid)
+        outbox_docs.append({
+            "event_id": mongo_id,
+            "event_type": "MEMORY_UPDATED" if previous else "MEMORY_CREATED",
+            "memory_type": memory["type"],
+            "memory_id": stable_id,
+            "mongo_id": mongo_id,
+            "user_id": user_id,
+            "supersedes_memory_ids": [str(old["_id"]) for old in previous],
+            "placeholders": placeholder_docs,
+            "pinecone": {"status": "pending", "attempts": 0, "last_error": None},
+            "neo4j": {"status": "pending", "attempts": 0, "last_error": None},
+            "created_at": now,
+            "updated_at": now,
+        })
+        output_ids.append((stable_id, mongo_id))
+
+    # Set both _id and public id before insert; no follow-up update_one needed.
+    for memory_type, documents in memory_docs_by_type.items():
+        if documents:
+            db[memory_type].insert_many(documents, ordered=True)
+    if outbox_docs:
+        db["outbox"].insert_many(outbox_docs, ordered=True)
+
+    return output_ids
+
+
+def _save_memory_and_outbox(db: Any, memory_data: dict, user_id: str) -> tuple[str, str]:
+    """Backward-compatible single-memory wrapper."""
+    return _save_memories_and_outbox(db, [memory_data], user_id)[0]
 
 
 def _save_message_background(user_id: str, user_input: str, role: str,
@@ -156,10 +208,13 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                 {"role": "user", "content": user_input},
             ])
 
-        for memory in response.memories:
-            memory_data = memory.model_dump()
-            memory_data["source_role"] = role
-            _save_memory_and_outbox(db, memory_data, user_id)
+        if response.memories:
+            memory_data = []
+            for memory in response.memories:
+                item = memory.model_dump()
+                item["source_role"] = role
+                memory_data.append(item)
+            _save_memories_and_outbox(db, memory_data, user_id)
 
         if response.memories:
             save_pending_memory(user_id)
