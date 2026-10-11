@@ -41,7 +41,7 @@ def update_mongo_placeholders(mongo_pending_memories, placeholder_updates):
     for memory in mongo_pending_memories:
         user_id = memory["user_id"]
         mongo_id = str(memory["mongo_id"])
-        collection_name = memory["memory_type"]
+        collection_name = "memories"
         active_names = []
         for placeholder in memory.get("placeholders", []):
             name = placeholder.get("name")
