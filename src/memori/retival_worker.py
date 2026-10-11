@@ -276,6 +276,7 @@ def Anchor_Resolver(
                 """
                 params = {"user_id": user_id}
                 source = "user_context"
+                result = Neo4jGraph.query(query, params=params)
             else:
                 query = f"""
                 MATCH (n:{label} {{user_id: $user_id}})
