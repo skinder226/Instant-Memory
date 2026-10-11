@@ -19,19 +19,20 @@ def _safe_labels(labels):
 
 
 def set_memory_to_neo4j(memory, user_id):
+    """Write graph edges in batches grouped by safe labels and relationship type."""
     temporal = memory.get("temporal") or {}
     is_current = temporal.get("is_current", True)
     valid_from = temporal.get("valid_from")
     valid_until = temporal.get("valid_until")
     memory_id = str(memory["_id"])
+    grouped = {}
 
     for entity in memory.get("entities", []):
         source = entity["source"]
         target = entity["target"]
         relationship_type = str(entity["relationship"])
-
         if not _REL_RE.fullmatch(relationship_type):
-            raise ValueError(f"Invalid Neo4j relationship type: {relationship_type!r}")
+            raise ValueError("Invalid Neo4j relationship type: " + repr(relationship_type))
 
         source_labels = _safe_labels(source.get("type"))
         target_labels = _safe_labels(target.get("type"))
@@ -47,23 +48,23 @@ def set_memory_to_neo4j(memory, user_id):
             "user_id": user_id,
             "memory_type": memory["type"],
         })
-
-        query = f"""
-        MERGE (n:{source_labels} {{name: $source_name, user_id: $user_id}})
-        MERGE (t:{target_labels} {{name: $target_name, user_id: $user_id}})
-        MERGE (n)-[r:{relationship_type} {{memory_id: $memory_id}}]->(t)
-        SET r += $properties
-        RETURN n, t, r
-        """
-
-        Neo4jGraph.query(query, params={
+        key = (source_labels, target_labels, relationship_type)
+        grouped.setdefault(key, []).append({
             "source_name": source_name,
             "target_name": target_name,
-            "user_id": user_id,
             "memory_id": memory_id,
             "properties": properties,
         })
 
+    for (source_labels, target_labels, relationship_type), rows in grouped.items():
+        query = f"""
+        UNWIND $rows AS row
+        MERGE (n:{source_labels} {{name: row.source_name, user_id: $user_id}})
+        MERGE (t:{target_labels} {{name: row.target_name, user_id: $user_id}})
+        MERGE (n)-[r:{relationship_type} {{memory_id: row.memory_id}}]->(t)
+        SET r += row.properties
+        """
+        Neo4jGraph.query(query, params={"user_id": user_id, "rows": rows})
 
 def set_memory_to_neo4j_supersedes(user_id, neo4j_supersedes_memory_ids):
     ids = [
