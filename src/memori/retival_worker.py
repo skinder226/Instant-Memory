@@ -609,20 +609,21 @@ def _process_single_query(q_text: str, user_id: str) -> list[dict]:
         return []
 
 
-def retrieve_memory(user_query: str, user_id: str):
+def retrieve_memory(user_query: str, user_id: str, converter_response=None):
     # Nothing stored yet (e.g. a brand-new user): skip every LLM call,
     # Pinecone query and Neo4j query.
     if not user_has_memories(user_id):
         print("No memories stored for this user, skipping retrieval.")
         return []
 
-    converter_response = invoke_with_retry(
-    query_converter,
-    [
-        SystemMessage(content=query_converter_prompt),
-        HumanMessage(content=user_query),
-    ],
-)
+    if converter_response is None:
+        converter_response = invoke_with_retry(
+            query_converter,
+            [
+                SystemMessage(content=query_converter_prompt),
+                HumanMessage(content=user_query),
+            ],
+        )
     logger.debug("Query converter output: %s", converter_response)
 
     query_texts = [q.query for q in converter_response.queries if q.query]
