@@ -1,17 +1,15 @@
 from src.memori.schema import ContextDecision, MemoryItem, RetrievalPlan
 
 
-def test_memory_item_scores_and_entities():
+def test_memory_item_has_no_unused_scoring_fields():
     item = MemoryItem(
         type="fact",
         content="The user uses Python.",
         source_role="user",
-        confidence=0.9,
-        importance=0.8,
         entities=[],
     )
-    assert item.confidence == 0.9
-    assert item.importance == 0.8
+    assert "confidence" not in item.model_dump()
+    assert "importance" not in item.model_dump()
 
 
 def test_retrieval_plan_allows_history_filter_and_six_hops():
