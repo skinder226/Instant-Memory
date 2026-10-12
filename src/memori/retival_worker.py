@@ -454,12 +454,13 @@ def Graph_Traversal(
               AND (size($rels) = 0 OR toLower(type(r)) IN $rels)
               AND ($is_current IS NULL OR coalesce(r.is_current, true) = $is_current)
               AND target.user_id = $user_id
+            UNWIND coalesce(r.memory_ids, [r.memory_id]) AS memory_id
             RETURN
                 s.root_id AS root_id,
                 start.name AS starting_node,
                 labels(start) AS starting_labels,
                 type(r) AS relationship_type,
-                r.memory_id AS memory_id,
+                memory_id AS memory_id,
                 r.memory_type AS memory_type,
                 target.name AS target_node,
                 labels(target) AS target_labels
