@@ -68,7 +68,6 @@ def set_memory_to_neo4j(memory, user_id):
 
         properties = dict(entity.get("properties") or {})
         properties.update({
-            "memory_id": memory_id,
             "is_current": is_current,
             "valid_from": valid_from,
             "valid_until": valid_until,
@@ -88,8 +87,23 @@ def set_memory_to_neo4j(memory, user_id):
         UNWIND $rows AS row
         MERGE (n:{source_labels} {{name: row.source_name, user_id: $user_id}})
         MERGE (t:{target_labels} {{name: row.target_name, user_id: $user_id}})
-        MERGE (n)-[r:{relationship_type} {{memory_id: row.memory_id}}]->(t)
-        SET r += row.properties
+        MERGE (n)-[r:{relationship_type} {{user_id: $user_id}}]->(t)
+        ON CREATE SET r.memory_ids = []
+        SET r.memory_ids = CASE
+                WHEN row.memory_id IN coalesce(r.memory_ids, [])
+                THEN coalesce(r.memory_ids, [])
+                ELSE coalesce(r.memory_ids, []) + row.memory_id
+            END,
+            r += row.properties,
+            r.is_current = CASE
+                WHEN row.properties.is_current = true THEN true
+                ELSE coalesce(r.is_current, row.properties.is_current)
+            END,
+            r.valid_until = CASE
+                WHEN row.properties.is_current = true THEN null
+                ELSE row.properties.valid_until
+            END,
+            r.valid_from = coalesce(r.valid_from, row.properties.valid_from)
         """
         Neo4jGraph.query(query, params={"user_id": user_id, "rows": rows})
 
@@ -104,7 +118,9 @@ def set_memory_to_neo4j_supersedes(user_id, neo4j_supersedes_memory_ids):
 
     query = """
     UNWIND $memory_ids AS memory_id
-    MATCH (n {user_id: $user_id})-[r {memory_id: memory_id}]->(t {user_id: $user_id})
+    MATCH (n {user_id: $user_id})-[r {user_id: $user_id}]->(t {user_id: $user_id})
+    WHERE memory_id IN coalesce(r.memory_ids, [r.memory_id])
+      AND all(mid IN coalesce(r.memory_ids, [r.memory_id]) WHERE mid IN $memory_ids)
     SET r.is_current = false,
         r.valid_until = $valid_until
     """
