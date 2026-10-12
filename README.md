@@ -70,7 +70,7 @@ The script requires you to type `DROP` before it removes those collections. Do n
 
 The graph writer now uses the user, source node, relationship type, and target node as the logical edge identity. Supporting MongoDB memory IDs are retained in the relationship's `memory_ids` list, so repeating a fact in another memory does not create a new logical edge. Retrieval resolves the type of each supporting memory from MongoDB.
 
-After deploying this code, back up Neo4j and consolidate duplicate edges already present in a user's graph:
+Before processing new messages with this code, back up Neo4j and consolidate duplicate edges already present in a user's graph:
 
     uv run python scripts/deduplicate_neo4j_relationships.py --user-id user_125
 
