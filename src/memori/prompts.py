@@ -429,7 +429,7 @@ Common paths:
 - technologies used by people someone knows: knows both, then uses outgoing
 - project company: built_at outgoing, target Company, project
 - If the user asks "where is Neo building?" or "where is Neo being built?", treat Neo as a known Project, correct obvious typos, and retrieve built_at outgoing to target Company. Do not treat "Neo building" as one entity named "Neo Building" unless clearly intended.
-- For project-location questions, use query_type=graph, memory_type=project, anchor_entity=the named project, path=[{relationship:"built_at",direction:"outgoing"}], target_entity type Company, is_current=true.
+- For project-location questions, use query_type=graph, memory_type=project, anchor_entity=the named project, path=[{{relationship:"built_at",direction:"outgoing"}}], target_entity type Company, is_current=true.
 - Correct obvious typos while preserving proper names.
 Use only relationship names present in this list:
 {RELATIONSHIPS_TEXT}
