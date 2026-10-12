@@ -461,7 +461,7 @@ def Graph_Traversal(
                 labels(start) AS starting_labels,
                 type(r) AS relationship_type,
                 memory_id AS memory_id,
-                r.memory_type AS memory_type,
+                null AS memory_type,
                 target.name AS target_node,
                 labels(target) AS target_labels
             LIMIT $row_limit
@@ -476,6 +476,24 @@ def Graph_Traversal(
                     "row_limit": remaining,
                 },
             ) or [])
+
+        # A canonical graph edge may be supported by memories of different
+        # types. Resolve each supporting memory's type from MongoDB rather
+        # than trusting one type stored on the shared relationship.
+        mongo_ids = {
+            ObjectId(str(row.get("memory_id")))
+            for row in rows
+            if ObjectId.is_valid(str(row.get("memory_id") or ""))
+        }
+        types_by_memory_id = {}
+        if mongo_ids:
+            for memory_doc in db["memories"].find(
+                {"_id": {"$in": list(mongo_ids)}, "user_id": user_id},
+                {"type": 1},
+            ):
+                types_by_memory_id[str(memory_doc["_id"])] = memory_doc.get("type")
+        for row in rows:
+            row["memory_type"] = types_by_memory_id.get(str(row.get("memory_id")))
 
         next_nodes = []
         for row in rows:
