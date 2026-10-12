@@ -249,7 +249,7 @@ Return ONLY valid MemorySchema JSON (no markdown, no commentary).
 
 # OUTPUT
 {{"memories": [full MemoryItem objects], "placeholder_updates": [{{"filled_placeholders": {{"name": "<placeholder>", "value": "<value>"}}}}]}}
-- memories: brand-new memories, or existing ones whose content/entities/type///temporal truly changed.
+- memories: brand-new memories, or existing ones whose content/entities/type/temporal truly changed.
 - placeholder_updates: ONLY when a placeholder now has a real value. Each entry is ONLY the filled_placeholders object. One entry per resolved name (no cap on names). It applies to EVERY memory sharing that placeholder. Do not resend those memories/entities/ids.
 - Both lists may be filled at once. Nothing qualifies -> {{"memories": [], "placeholder_updates": []}}
 - The "entities" array must contain ONLY valid entity objects. Never include empty strings, nulls, or placeholders-as-strings.
