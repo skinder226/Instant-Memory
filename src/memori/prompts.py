@@ -406,8 +406,17 @@ For graph/hybrid, set:
   both for symmetric social/colleague relationships.
 - max_hops: number of path relationships; use 1 for an unspecified one-hop
   hybrid search and 0 for semantic.
-- is_current: true by default/current facts; false only for explicitly former/
-  historical facts; null for explicit history covering both current and past.
+- is_current: choose based on the user's actual temporal intent:
+  - true for ordinary current-state questions and latest known facts (DEFAULT).
+  - false only when the user explicitly asks for past/former/previous/
+    outdated information (e.g. "Where did I work before?", "What was the
+    previous version of Neo?").
+  - null when the user asks for a history/timeline/change over time or
+    explicitly compares past and current states (e.g. "How has Neo changed?",
+    "Compare my previous project description with the current one").
+  - Do NOT return false merely because a memory is old; use the stored
+    temporal status and the wording/intent of the query.
+  - Always set is_current explicitly.
 - top_k: 20 normally; 30 for broad semantic/hybrid searches.
 
 Common paths:
@@ -456,6 +465,10 @@ Query "What did Ali say about the system?":
 "max_hops":0,"is_current":true,"top_k":20}}
 
 Rules:
+- For "What is my current/latest X?" and ordinary questions about X, use
+  is_current=true unless the query explicitly asks for history.
+- For "What was my previous/former X?" use is_current=false.
+- For "How did X change?" / "show the history of X" use is_current=null.
 - For a user's own attribute, always anchor at __current_user__, never a user ID.
 - Keep relationships lowercase and valid; do not invent relationship names.
 - Separate memory_type from query_type.
