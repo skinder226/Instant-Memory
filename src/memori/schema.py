@@ -234,16 +234,6 @@ class MemoryItem(BaseModel):
         description="Structured representation of the memory as a graph of entities and relationships"
     )
 
-    confidence: float = Field(
-        default=1.0, ge=0.0, le=1.0,
-        description="Confidence that the extracted memory is supported by the latest user message."
-    )
-
-    importance: float = Field(
-        default=0.5, ge=0.0, le=1.0,
-        description="How important this memory is for future personalization and retrieval."
-    )
-
     @field_validator("entities", mode="before")
     @classmethod
     def validate_entities(cls, value):
