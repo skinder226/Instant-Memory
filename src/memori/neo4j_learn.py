@@ -90,9 +90,9 @@ def set_memory_to_neo4j(memory, user_id):
         MERGE (n)-[r:{relationship_type} {{user_id: $user_id}}]->(t)
         ON CREATE SET r.memory_ids = []
         SET r.memory_ids = CASE
-                WHEN row.memory_id IN coalesce(r.memory_ids, [])
-                THEN coalesce(r.memory_ids, [])
-                ELSE coalesce(r.memory_ids, []) + row.memory_id
+                WHEN row.memory_id IN coalesce(r.memory_ids, CASE WHEN r.memory_id IS NULL THEN [] ELSE [r.memory_id] END)
+                THEN coalesce(r.memory_ids, CASE WHEN r.memory_id IS NULL THEN [] ELSE [r.memory_id] END)
+                ELSE coalesce(r.memory_ids, CASE WHEN r.memory_id IS NULL THEN [] ELSE [r.memory_id] END) + row.memory_id
             END,
             r += row.properties,
             r.is_current = CASE
@@ -119,7 +119,7 @@ def set_memory_to_neo4j_supersedes(user_id, neo4j_supersedes_memory_ids):
     query = """
     UNWIND $memory_ids AS memory_id
     MATCH (n {user_id: $user_id})-[r {user_id: $user_id}]->(t {user_id: $user_id})
-    WHERE memory_id IN coalesce(r.memory_ids, [r.memory_id])
+    WHERE memory_id IN coalesce(r.memory_ids, CASE WHEN r.memory_id IS NULL THEN [] ELSE [r.memory_id] END)
       AND all(mid IN coalesce(r.memory_ids, [r.memory_id]) WHERE mid IN $memory_ids)
     SET r.is_current = false,
         r.valid_until = $valid_until
