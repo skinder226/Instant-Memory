@@ -5,14 +5,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_python_sources_compile():
-    files = [ROOT / "main.py", *((ROOT / "src").rglob("*.py")), *((ROOT / "scripts").rglob("*.py"))]
+    files = [*((ROOT / "src").rglob("*.py")), *((ROOT / "scripts").rglob("*.py"))]
+    # Some project layouts do not keep a main.py at the repository root.
+    root_main = ROOT / "main.py"
+    if root_main.exists():
+        files.append(root_main)
     for path in files:
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
 
 
 def test_prompt_uses_runtime_timestamp_marker():
     prompt = (ROOT / "src/memori/prompts.py").read_text(encoding="utf-8")
-    assert '__CURRENT_DATETIME__' in prompt
+    assert 'RUNTIME_TIMESTAMP' in prompt
     assert 'datetime.now(timezone.utc).isoformat()' not in prompt
 
 
