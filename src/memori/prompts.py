@@ -284,7 +284,7 @@ D5. Different durable facts -> separate memories. E.g. "I am building a project 
 P1. If the user references a durable personal attribute (employer, project, city, school, favorite tool, manager) whose value is unresolved, create a placeholder: lowercase snake_case, starts with "user_", never guessed, reused for the same attribute (user_company, user_project, user_location, user_school, user_manager, user_favorite_editor). Apply R7 first.
 P1b. A placeholder node must NEVER be linked to its own value with has_name. If the value is in the message, use the value as the node name. A node starting with "user_" may only exist when the value is truly unknown.
 P2. Placeholder node e.g. {{"name": "user_company", "type": ["Company"]}}.
-P3. Memory with unresolved placeholder: "placeholders": [{{"name": "..."}}]  <= 0.5.
+P3. Memory with unresolved placeholders must list each unresolved placeholder in "placeholders".
 P4/P5. The placeholder must literally appear in content as "(user_company)" ("The user works at (user_company)."), and every "(x)" in content must be in placeholders and vice versa. No orphans. Any "user_x" node in entities must also be in placeholders.
 P6. The same placeholder is reused across separate memories (never create user_project_company / project_company).
 P7. If a later message reveals a placeholder value, it is NOT a new memory/update: emit only {{"filled_placeholders": {{"name": "user_company", "value": "Microsoft"}}}} in placeholder_updates. E.g. "I work at Microsoft" while "The user works at (user_company)." exists -> {{"memories": [], "placeholder_updates": [one entry]}}.
@@ -311,7 +311,7 @@ For "my company/my employer/the company I work for/where I work/at work" with un
 
 Other inputs -> outputs (same JSON structure; only content/entities shown):
 - "I am building Neo at Microsoft." -> M1 project "The user is building a project called Neo at Microsoft.": user --works_on--> Neo; Neo --built_at--> Microsoft. M2 profile "The user works at Microsoft.": user --works_at--> Microsoft.
-- "I am building Neo in my company." -> M1 project "...called Neo at (user_company).": user --works_on--> Neo; Neo --built_at--> user_company. M2 profile "The user works at (user_company)." (conf <= 0.5).
+- "I am building Neo in my company." -> M1 project "...called Neo at (user_company).": user --works_on--> Neo; Neo --built_at--> user_company. M2 profile "The user works at (user_company)." .
 - "I am building Neo." -> only project: user --works_on--> Neo. No invented company.
 - "I am building Neo at her company." -> only "The user is building a project called Neo.": user --works_on--> Neo. No user_company, no works_at. (Third-party context may be kept as a scalar note.)
 - "I am building Neo as my personal project." -> "The user is building a project called Neo, which is a personal project.": user --works_on--> Neo. No company edges/placeholders.
@@ -329,7 +329,7 @@ Other inputs -> outputs (same JSON structure; only content/entities shown):
   M2 profile "The user works at Microsoft.": user --works_at--> Microsoft.
   M3 profile "The user has a friend (user_friend) who works with the user at Microsoft." placeholders [user_friend]: user --has_friend--> user_friend; user --works_with--> user_friend; user_friend --works_at--> Microsoft.
   M4 project "The user is building a project called Neo, an advanced AI agent used to solve translation problems, with a friend (user_friend) at Microsoft." placeholders [user_friend]: user --works_on--> Neo (properties {{"description": "advanced AI agent used to solve translation problems"}}); user_friend --works_on--> Neo; user --works_with--> user_friend; Neo --built_at--> Microsoft.
-  M3 and M4 share user_friend; their  <= 0.5.
+  M3 and M4 share the same user_friend entity.
 
 # MEMORY TYPE (must match the retrieval router exactly; exactly one per memory)
 - profile: stable identity: name, age, location, occupation, role, employer/company.
@@ -355,12 +355,12 @@ Employer -> "profile". Project -> "project".
 Entity format: {{"source": Node, "relationship": str, "target": Node, "properties": dict}}; Node = {{"name": "...", "type": ["..."]}}.
 Relationships are specific snake_case verbs (works_at, works_on, built_at, uses, has_name, lives_in, prefers, works_with, built_for, part_of). Never vague ones (is, has, related_to). Company, project, database, tool etc. are always separate nodes.
 
-# SCORES / META
+# SOURCE / TEMPORAL METADATA
 - source_role: always "user".
 - temporal for current memories: {{"valid_from": "{current_datetime}", "valid_until": null, "is_current": true}}. Never invent a date.
 
 # FINAL CHECK (before returning)
-1 Fix typos (R1). 2 Pronouns/possessives (R2). 3 Filler words (R3). 4 Third-party companies (R4). 5 Personal projects (R5). 6 Value already stated? no placeholder (R7). 7 Collaborator edges complete (R8). 8 Second project kept (R9). 9 Detect every durable fact; run coverage (R13). 10 Different facts in different memories (project + collaborators + related projects stay together). 11 Types per the type table. 12 Node types per the entity table. 13 Project facts in project memories; employer facts in separate profile memories; if project is at user's company create BOTH, with the SAME user_company placeholder; never works_at inside a project memory; never a second placeholder for the same company. 14 Later resolution of user_company = ONE placeholder_updates entry applying to all memories sharing it. 15 Placeholders in content == placeholders array; placeholder memories  <= 0.5. 16 Never return unchanged memories; never invent ids, dates, or placeholder values. 17 Return ONLY valid MemorySchema JSON. 18 Is any person/company/project name in the message? Then NO user_* placeholder for it. Any "(user_x)" in content or "user_x" in entities must also be in "placeholders"; otherwise rewrite using the real name. Every item in "entities" must be an object, never "" or null.
+1 Fix typos (R1). 2 Pronouns/possessives (R2). 3 Filler words (R3). 4 Third-party companies (R4). 5 Personal projects (R5). 6 Value already stated? no placeholder (R7). 7 Collaborator edges complete (R8). 8 Second project kept (R9). 9 Detect every durable fact; run coverage (R13). 10 Different facts in different memories (project + collaborators + related projects stay together). 11 Types per the type table. 12 Node types per the entity table. 13 Project facts in project memories; employer facts in separate profile memories; if project is at user's company create BOTH, with the SAME user_company placeholder; never works_at inside a project memory; never a second placeholder for the same company. 14 Later resolution of user_company = ONE placeholder_updates entry applying to all memories sharing it. 15 Placeholders in content == placeholders array;  16 Never return unchanged memories; never invent ids, dates, or placeholder values. 17 Return ONLY valid MemorySchema JSON. 18 Is any person/company/project name in the message? Then NO user_* placeholder for it. Any "(user_x)" in content or "user_x" in entities must also be in "placeholders"; otherwise rewrite using the real name. Every item in "entities" must be an object, never "" or null.
 
 ALLOWED_RELATIONSHIPS: {RELATIONSHIPS_TEXT}
 
