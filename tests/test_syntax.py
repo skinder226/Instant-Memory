@@ -28,3 +28,15 @@ def test_graph_writer_uses_canonical_relationship_identity():
     assert 'MERGE (n)-[r:{relationship_type} {{user_id: $user_id}}]->(t)' in writer
     assert "r.memory_ids" in writer
     assert "memory_id: row.memory_id" not in writer
+
+
+
+def test_temporal_retrieval_intent_is_explicit_and_enforced():
+    prompt = (ROOT / "src/memori/prompts.py").read_text(encoding="utf-8")
+    worker = (ROOT / "src/memori/retival_worker.py").read_text(encoding="utf-8")
+
+    assert "is_current=true" in prompt
+    assert "is_current=false" in prompt
+    assert "is_current=null" in prompt
+    assert "is_current=retrieval_plan.is_current" in worker
+    assert "memory_is_current != is_current" in worker
