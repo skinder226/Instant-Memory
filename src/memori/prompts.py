@@ -276,7 +276,7 @@ R13. Coverage check (run LAST): split message into clauses; every clause must be
 # DECISIONS
 D1. Message merely restates an existing memory (even rephrased/typo) -> return nothing. Never re-return unchanged memories.
 D2. Genuine change/replacement -> return only the new state with the EXACT existing id. Never return old + new. New memories use "id": null. Never invent ids.
-D3. No regression: an update must not be less accurate/specific/complete than existing unless the user contradicts/retracts. Never replace a known value with a placeholder, never lower  unless the fact became less certain. If the new state has MORE placeholders, LOWER , or FEWER resolved facts without justification, discard it. Exception: correcting a previously stored misread filler (R3), pronoun (R2), or third-party attribute bound to the user (R4).
+D3. No regression: an update must not be less accurate, specific, or complete than the existing memory unless the user contradicts or retracts it. Never replace a known value with a placeholder or discard an update that has more placeholders or fewer resolved facts without justification. Exception: correcting a previously stored misread filler (R3), pronoun (R2), or third-party attribute bound to the user (R4).
 D4. Message repeats a known fact and adds a new one -> return ONLY the new fact.
 D5. Different durable facts -> separate memories. E.g. "I am building a project in my company" = project memory (user --works_on--> project; project --built_at--> company) + SEPARATE profile memory (user --works_at--> company), even if sharing a placeholder. NEVER put user --works_at--> company inside a project memory. D5 does NOT split a project from its collaborators (R8) or related projects (R9).
 
@@ -311,14 +311,14 @@ For "my company/my employer/the company I work for/where I work/at work" with un
 
 Other inputs -> outputs (same JSON structure; only content/entities shown):
 - "I am building Neo at Microsoft." -> M1 project "The user is building a project called Neo at Microsoft.": user --works_on--> Neo; Neo --built_at--> Microsoft. M2 profile "The user works at Microsoft.": user --works_at--> Microsoft.
-- "I am building Neo in my company." -> M1 project "...called Neo at (user_company).": user --works_on--> Neo; Neo --built_at--> user_company. M2 profile "The user works at (user_company)." .
+- "I am building Neo in my company." -> M1 project "...called Neo at (user_company).": user --works_on--> Neo; Neo --built_at--> user_company. M2 profile "The user works at (user_company)."
 - "I am building Neo." -> only project: user --works_on--> Neo. No invented company.
 - "I am building Neo at her company." -> only "The user is building a project called Neo.": user --works_on--> Neo. No user_company, no works_at. (Third-party context may be kept as a scalar note.)
 - "I am building Neo as my personal project." -> "The user is building a project called Neo, which is a personal project.": user --works_on--> Neo. No company edges/placeholders.
-- "I am using Python for my memory system." -> M1 fact "The user uses Python.": user --uses--> Python. M2 project "The user is working on a project called Memory System, using Python.": user --works_on--> Memory System; Memory System --uses--> Python. No placeholder,  1.0.
-- "I am building the AI agent with Ali." -> ONE project memory "The user is building a project called AI Agent with Ali.": user --works_on--> AI Agent; Ali --works_on--> AI Agent; user --works_with--> Ali.  1.0,  0.9.
+- "I am using Python for my memory system." -> M1 fact "The user uses Python.": user --uses--> Python. M2 project "The user is working on a project called Memory System, using Python.": user --works_on--> Memory System; Memory System --uses--> Python. No placeholder.
+- "I am building the AI agent with Ali." -> ONE project memory "The user is building a project called AI Agent with Ali.": user --works_on--> AI Agent; Ali --works_on--> AI Agent; user --works_with--> Ali.
 - "I am working on memory system for building the AI Agent." -> ONE project memory "The user is working on a project called Memory System, which is being built for a project called AI Agent.": user --works_on--> Memory System; user --works_on--> AI Agent; Memory System --built_for--> AI Agent.  1.0,  0.9.
-- (NAMED friend, name IS given) "Hay may name is skinder I am working at Mirosoft with friend fasil and we will working on Project called Neo to solving the problmes of the Ai" -> 4 memories, NO placeholders, "placeholders": [],  1.0:
+- (NAMED friend, name IS given) "Hay may name is skinder I am working at Mirosoft with friend fasil and we will working on Project called Neo to solving the problmes of the Ai" -> 4 memories, NO placeholders, "placeholders": []:
   M1 profile "The user's name is Skinder.": user --has_name--> Skinder.
   M2 profile "The user works at Microsoft.": user --works_at--> Microsoft.
   M3 profile "The user has a friend named Fasil who works with the user at Microsoft.": user --has_friend--> Fasil; user --works_with--> Fasil; Fasil --works_at--> Microsoft.
