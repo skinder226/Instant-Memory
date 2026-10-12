@@ -66,6 +66,17 @@ After checking the application and confirming the migration, you may optionally 
 The script requires you to type `DROP` before it removes those collections. Do not use that option until you have a verified backup.
 
 
+### Neo4j fact deduplication
+
+The graph writer now uses the user, source node, relationship type, and target node as the logical edge identity. Supporting MongoDB memory IDs are retained in the relationship's `memory_ids` list, so repeating a fact in another memory does not create a new logical edge. Retrieval resolves the type of each supporting memory from MongoDB.
+
+After deploying this code, back up Neo4j and consolidate duplicate edges already present in a user's graph:
+
+    uv run python scripts/deduplicate_neo4j_relationships.py --user-id user_125
+
+The script is scoped to the specified user. Review the resulting graph before running it for other users. It combines duplicate edges with the same endpoints and relationship type, keeps their memory IDs, and retains the fact as current if any duplicate edge was current. It does not merge distinct source/target pairs or different relationship types.
+
+
 ## LLM configuration
 
 Configure `Mem_llm_provider`, `Mem_llm_Api`, `Mem_base_url`, and
