@@ -627,7 +627,12 @@ def retrieve(plan: RetrievalPlan, user_id: str):
 # ---------------------------------------------------------------------------
 # Results -> Mongo documents
 # ---------------------------------------------------------------------------
-def convert_results_to_mongo_docs(results: dict, query_type: str, user_id: str):
+def convert_results_to_mongo_docs(
+    results: dict,
+    query_type: str,
+    user_id: str,
+    is_current: bool | None = True,
+):
     refs = []
 
     if query_type in ("semantic", "hybrid"):
@@ -663,10 +668,18 @@ def convert_results_to_mongo_docs(results: dict, query_type: str, user_id: str):
     final_docs = []
     for memory_id, memory_type in unique_refs:
         doc = docs_by_key.get((memory_id, memory_type))
-        if doc:
-            final_docs.append(doc)
-        else:
+        if not doc:
             debug(f"Mongo doc not found: {memory_type}/{memory_id}")
+            continue
+
+        # Enforce temporal intent against each source-of-truth memory.
+        # A shared Neo4j edge may contain both current and historical memory IDs,
+        # so filtering only r.is_current is not sufficient.
+        memory_is_current = (doc.get("temporal") or {}).get("is_current", True)
+        if is_current is not None and memory_is_current != is_current:
+            continue
+
+        final_docs.append(doc)
 
     return final_docs
 
@@ -681,7 +694,12 @@ def _process_single_query(q_text: str, user_id: str) -> list[dict]:
         results, effective_type = retrieve(retrieval_plan, user_id)
         logger.debug("Retrieval results (%s) for %r: %s", effective_type, q_text, results)
 
-        return convert_results_to_mongo_docs(results, effective_type, user_id)
+        return convert_results_to_mongo_docs(
+            results,
+            effective_type,
+            user_id,
+            is_current=retrieval_plan.is_current,
+        )
     except Exception as e:
         # One failing query should not kill the others.
         logger.exception("Query failed (%r)", q_text)
