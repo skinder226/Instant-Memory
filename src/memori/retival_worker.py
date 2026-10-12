@@ -452,7 +452,10 @@ def Graph_Traversal(
             MATCH (start){pattern}(target)
             WHERE coalesce(r.user_id, $user_id) = $user_id
               AND (size($rels) = 0 OR toLower(type(r)) IN $rels)
-              AND ($is_current IS NULL OR coalesce(r.is_current, true) = $is_current)
+              // Do not filter a canonical/shared edge by r.is_current:
+              // one edge can reference both current and historical memory IDs.
+              // Each source-of-truth Mongo memory is filtered later by its own
+              // temporal.is_current in convert_results_to_mongo_docs.
               AND target.user_id = $user_id
             UNWIND coalesce(r.memory_ids, [r.memory_id]) AS memory_id
             RETURN
@@ -472,7 +475,6 @@ def Graph_Traversal(
                     "user_id": user_id,
                     "starts": starts,
                     "rels": rels_lc,
-                    "is_current": is_current,
                     "row_limit": remaining,
                 },
             ) or [])
