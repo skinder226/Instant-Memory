@@ -89,6 +89,9 @@ def set_memory_to_neo4j(memory, user_id):
         MERGE (t:{target_labels} {{name: row.target_name, user_id: $user_id}})
         MERGE (n)-[r:{relationship_type} {{user_id: $user_id}}]->(t)
         ON CREATE SET r.memory_ids = []
+        WITH r, row,
+             coalesce(r.is_current, row.properties.is_current) AS previous_is_current,
+             r.valid_from AS previous_valid_from
         SET r.memory_ids = CASE
                 WHEN row.memory_id IN coalesce(r.memory_ids, CASE WHEN r.memory_id IS NULL THEN [] ELSE [r.memory_id] END)
                 THEN coalesce(r.memory_ids, CASE WHEN r.memory_id IS NULL THEN [] ELSE [r.memory_id] END)
@@ -97,13 +100,13 @@ def set_memory_to_neo4j(memory, user_id):
             r += row.properties,
             r.is_current = CASE
                 WHEN row.properties.is_current = true THEN true
-                ELSE coalesce(r.is_current, row.properties.is_current)
+                ELSE previous_is_current
             END,
             r.valid_until = CASE
                 WHEN row.properties.is_current = true THEN null
                 ELSE row.properties.valid_until
             END,
-            r.valid_from = coalesce(r.valid_from, row.properties.valid_from)
+            r.valid_from = coalesce(previous_valid_from, row.properties.valid_from)
         """
         Neo4jGraph.query(query, params={"user_id": user_id, "rows": rows})
 
