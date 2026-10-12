@@ -8,8 +8,8 @@ def test_graph_writer_merges_logical_fact_without_memory_id_identity(monkeypatch
         calls.append((query, params))
         return []
 
-    monkeypatch.setattr(neo4j_learn.Neo4jGraph, "query", staticmethod(fake_query))
-    neo4j_learn._INDEXED_LABELS.clear()
+    monkeypatch.setattr(neo4j_learn.Neo4jGraph, "query", fake_query)
+    monkeypatch.setattr(neo4j_learn, "_INDEXED_LABELS", set())
 
     base_memory = {
         "_id": "memory-one",
