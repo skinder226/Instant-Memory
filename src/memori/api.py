@@ -78,9 +78,9 @@ def _retrieve_project_memories_fast(user_id: str) -> list[str]:
     return results
 
 _PERSONAL_WORKPLACE_QUESTION_RE = re.compile(
-    r"\bwhere\\b.{0,45}\\b(?:i|im|i'm|am i|we|we're|are we)\\b.{0,30}\\b(?:work\w{0,5}|wokring|wroking|employ\w{0,5})\\b|"
-    r"\bwhere\\s+(?:do|does|am|are)\\s+(?:i|we|the user)\\b.{0,20}\\b(?:work\w{0,5}|employ\w{0,5})\\b|"
-    r"\b(?:who|which company)\\b.{0,30}\\b(?:employ\w{0,5}|employer|work\\s+for)\\b",
+    r"\bwhere\b.{0,45}\b(?:i|im|i'm|am i|we|we're|are we)\b.{0,30}\b(?:work\w{0,5}|wokring|wroking|employ\w{0,5})\b|"
+    r"\bwhere\s+(?:do|does|am|are)\s+(?:i|we|the user)\b.{0,20}\b(?:work\w{0,5}|employ\w{0,5})\b|"
+    r"\b(?:who|which company)\b.{0,30}\b(?:employ\w{0,5}|employer|work\s+for)\b",
     re.IGNORECASE,
 )
 
