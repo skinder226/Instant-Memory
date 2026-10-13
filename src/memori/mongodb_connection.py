@@ -14,19 +14,35 @@ class _MongoTimingListener(monitoring.CommandListener):
     def __init__(self):
         self._started = {}
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(event):
+        # request_id is scoped to a connection; include connection_id so
+        # concurrent commands on different sockets cannot overwrite timings.
+        return (event.connection_id, event.request_id)
+
     def started(self, event):
         with self._lock:
-            self._started[event.request_id] = time.perf_counter()
+            self._started[self._key(event)] = time.perf_counter()
+
     def succeeded(self, event):
         with self._lock:
-            started = self._started.pop(event.request_id, None)
+            started = self._started.pop(self._key(event), None)
         if started is not None:
-            logger.info("DB_TIMING database=mongodb command=%s duration_ms=%.2f status=ok", event.command_name, (time.perf_counter() - started) * 1000)
+            logger.info(
+                "DB_TIMING database=mongodb command=%s duration_ms=%.2f status=ok",
+                event.command_name, (time.perf_counter() - started) * 1000,
+            )
+
     def failed(self, event):
         with self._lock:
-            started = self._started.pop(event.request_id, None)
+            started = self._started.pop(self._key(event), None)
         if started is not None:
-            logger.warning("DB_TIMING database=mongodb command=%s duration_ms=%.2f status=error failure=%s", event.command_name, (time.perf_counter() - started) * 1000, event.failure)
+            logger.warning(
+                "DB_TIMING database=mongodb command=%s duration_ms=%.2f status=error failure=%s",
+                event.command_name, (time.perf_counter() - started) * 1000,
+                event.failure,
+            )
 
 connection_string = os.getenv("mongodb_URI")
 # PyMongo connects lazily; the first command includes initial connection/setup delay.
