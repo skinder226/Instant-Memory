@@ -691,7 +691,7 @@ def convert_results_to_mongo_docs(
 def _fallback_personal_work_plan(q_text: str, user_id: str) -> RetrievalPlan | None:
     """Use a safe deterministic graph plan if the provider rejects planner JSON."""
     if not re.search(
-        r"\\b(?:(?:my|may)\\s+(?:job|work|career|position|role|employer|company|workplace|employment)|current job|current role|current employer|work context)\\b",
+        r"\b(?:(?:my|may)\s+(?:job|work|career|position|role|employer|company|workplace|employment)|current job|current role|current employer|work context)\b",
         q_text,
         re.IGNORECASE,
     ):
