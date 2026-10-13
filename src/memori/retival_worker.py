@@ -688,9 +688,42 @@ def convert_results_to_mongo_docs(
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+def _fallback_personal_work_plan(q_text: str, user_id: str) -> RetrievalPlan | None:
+    """Use a safe deterministic graph plan if the provider rejects planner JSON."""
+    if not re.search(
+        r"\\b(?:my|may)\\s+(?:job|work|career|position|role|employer|company|workplace|employment)\\b",
+        q_text,
+        re.IGNORECASE,
+    ):
+        return None
+
+    return RetrievalPlan(
+        query_type="hybrid",
+        query="the current user's job, role, employer, and work context",
+        memory_type="profile",
+        entities=[{"name": "__current_user__", "entity_type": "User"}],
+        anchor_entity={"name": "__current_user__", "entity_type": "User"},
+        path=[{"relationship": "works_at", "direction": "outgoing"}],
+        target_entity={"name": "", "entity_type": "Company"},
+        max_hops=1,
+        is_current=True,
+        top_k=20,
+    )
+
+
 def _process_single_query(q_text: str, user_id: str) -> list[dict]:
     try:
-        retrieval_plan = get_retrieval_plan(q_text)
+        try:
+            retrieval_plan = get_retrieval_plan(q_text)
+        except Exception:
+            retrieval_plan = _fallback_personal_work_plan(q_text, user_id)
+            if retrieval_plan is None:
+                raise
+            logger.warning(
+                "Retrieval planner failed; using deterministic personal-work plan "
+                "for user_id=%s",
+                user_id,
+            )
         logger.debug("Retrieval plan for %r: %s", q_text, retrieval_plan)
 
         results, effective_type = retrieve(retrieval_plan, user_id)
