@@ -16,7 +16,7 @@ _routing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori
 
 
 _PERSONAL_WORK_REFERENCE_RE = re.compile(
-    r"\bmy\s+(?:job|work|career|position|role|employer|company|workplace|employment)\\b",
+    r"\bmy\s+(?:job|work|career|position|role|employer|company|workplace|employment)\b",
     re.IGNORECASE,
 )
 
@@ -29,7 +29,7 @@ def _requires_personal_memory_lookup(message: str) -> bool:
     has_personal_work_reference = bool(_PERSONAL_WORK_REFERENCE_RE.search(text))
     asks_for_information = bool(re.search(
         r"\b(what|where|who|which|how|why|think|opinion|feel|tell|describe|"
-        r"recommend|advice|should|could|would|is|are|do|does|did)\\b",
+        r"recommend|advice|should|could|would|is|are|do|does|did)\b",
         text,
         re.IGNORECASE,
     ))
