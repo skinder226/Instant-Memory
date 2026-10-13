@@ -78,9 +78,9 @@ def _retrieve_project_memories_fast(user_id: str) -> list[str]:
     return results
 
 _PERSONAL_WORKPLACE_QUESTION_RE = re.compile(
-    r"\bwhere\b.{0,35}\b(?:i|im|i'm|am i)\b.{0,25}\b(?:work|working|employed)\b|"
-    r"\bwhere\s+(?:do|does)\s+(?:i|the user)\s+work\b|"
-    r"\b(?:who|which company)\b.{0,30}\b(?:employs|employer|work for)\b",
+    r"\\bwhere\\b.{0,45}\\b(?:i|im|i'm|am i|we|we're|are we)\\b.{0,30}\\b(?:work\\w{0,5}|employ\\w{0,5})\\b|"
+    r"\\bwhere\\s+(?:do|does|am|are)\\s+(?:i|we|the user)\\b.{0,20}\\b(?:work\\w{0,5}|employ\\w{0,5})\\b|"
+    r"\\b(?:who|which company)\\b.{0,30}\\b(?:employ\\w{0,5}|employer|work\\s+for)\\b",
     re.IGNORECASE,
 )
 
@@ -514,10 +514,8 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     if _requires_personal_project_lookup(user_input):
         fast_started = time.perf_counter()
         logger.info("RETRIEVAL_PATH user_id=%s path=project_fast", user_id)
-        _background_executor.submit(
-            _decide_and_save_background, user_id, user_input, role
-        )
-        result["memory_save_scheduled"] = True
+        # A direct lookup question is not new source information. Avoid an
+        # unnecessary provider call just to decide whether this question is savable.
         result["retrieval"] = _retrieve_project_memories_fast(user_id)
         logger.info(
             "RETRIEVAL_TIMING user_id=%s path=project_fast total_ms=%.2f result_count=%d",
@@ -531,10 +529,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     if _requires_personal_workplace_lookup(user_input):
         fast_started = time.perf_counter()
         logger.info("RETRIEVAL_PATH user_id=%s path=workplace_fast", user_id)
-        _background_executor.submit(
-            _decide_and_save_background, user_id, user_input, role
-        )
-        result["memory_save_scheduled"] = True
+        # Avoid an unnecessary provider request for a direct fact lookup.
         result["retrieval"] = _retrieve_workplace_memories_fast(user_id)
         logger.info(
             "RETRIEVAL_TIMING user_id=%s path=workplace_fast total_ms=%.2f result_count=%d",
