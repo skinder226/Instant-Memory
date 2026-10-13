@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
@@ -60,28 +61,51 @@ def _requires_personal_workplace_lookup(message: str) -> bool:
 
 
 def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
-    """Fetch current workplace facts from MongoDB without remote retrieval services."""
+    """Fetch workplace facts using the indexed user/current-memory filter.
+
+    Avoid unanchored MongoDB regex/$or scans across the whole collection.
+    Filter the current user's small memory set in Python instead.
+    """
     from .mongodb_connection import db
 
+    started = time.perf_counter()
     docs = list(db["memories"].find(
         {
             "user_id": user_id,
             "temporal.is_current": {"$ne": False},
-            "$or": [
-                {"entities": {"$elemMatch": {"relationship": "works_at"}}},
-                {"content": {"$regex": r"\b(?:works at|work at|working at|employed at|works for|work for)\b", "$options": "i"}},
-            ],
         },
         {"content": 1, "type": 1, "entities": 1, "temporal": 1},
-    ).limit(10))
-    docs.sort(key=lambda doc: (
-        0 if any(
-            isinstance(entity, dict) and entity.get("relationship") == "works_at"
-            for entity in (doc.get("entities") or [])
-        ) else 1,
-        0 if doc.get("type") == "profile" else 1,
+    ).limit(200))
+
+    workplace_docs = []
+    for doc in docs:
+        entities = doc.get("entities") or []
+        has_workplace_entity = any(
+            isinstance(entity, dict)
+            and str(entity.get("relationship", "")).lower() in {
+                "works_at", "works for", "employed_at", "employed_by"
+            }
+            for entity in entities
+        )
+        content = str(doc.get("content") or "")
+        has_workplace_content = bool(re.search(
+            r"\b(?:works at|work at|working at|employed at|works for|work for)\b",
+            content,
+            re.IGNORECASE,
+        ))
+        if has_workplace_entity or has_workplace_content:
+            workplace_docs.append((doc, has_workplace_entity))
+
+    workplace_docs.sort(key=lambda item: (
+        0 if item[1] else 1,
+        0 if item[0].get("type") == "profile" else 1,
     ))
-    return [doc["content"] for doc in docs if doc.get("content")]
+    results = [doc["content"] for doc, _ in workplace_docs if doc.get("content")][:10]
+    logger.info(
+        "Workplace Mongo lookup user_id=%s docs_scanned=%d results=%d elapsed_ms=%.1f",
+        user_id, len(docs), len(results), (time.perf_counter() - started) * 1000,
+    )
+    return results
 
 _PERSONAL_WORK_REFERENCE_RE = re.compile(
     r"\b(?:my|may)\s+(?:job|work|career|position|role|employer|company|workplace|employment)\b",
