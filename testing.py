@@ -1,4 +1,5 @@
 import os
+import time
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
@@ -39,7 +40,10 @@ while True:
         if not user_input.strip():
             continue
             
+        retrieval_started = time.perf_counter()
         memory_response = memori("user_125", user_input)
+        retrieval_seconds = time.perf_counter() - retrieval_started
+        print(f"⏱️ Memory retrieval took {retrieval_seconds:.3f} seconds")
         print("AI: ", end="", flush=True)
         
         # 3. Construct LangChain Message structures safely
@@ -50,12 +54,15 @@ while True:
         ]
         
         # 4. Stream chunks directly
+        response_started = time.perf_counter()
         full_response = ""
         for chunk in llm.stream(messages):
             if chunk.content:
                 print(chunk.content, end="", flush=True)
                 full_response += chunk.content
-        print("\n") 
+        response_seconds = time.perf_counter() - response_started
+        print(f"\n⏱️ AI response generation took {response_seconds:.3f} seconds")
+        print(f"⏱️ Total turn time (retrieval + AI response): {retrieval_seconds + response_seconds:.3f} seconds\n")
 
     except KeyboardInterrupt:
         print("\nSession interrupted. Goodbye!")
