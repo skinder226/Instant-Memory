@@ -178,6 +178,81 @@ def _requires_personal_memory_lookup(message: str) -> bool:
     return has_personal_work_reference and asks_for_information
 
 
+
+_RETRIEVAL_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "been", "being", "but",
+    "by", "did", "do", "does", "for", "from", "had", "has", "have", "he",
+    "her", "here", "hers", "him", "his", "how", "i", "if", "in", "into",
+    "is", "it", "its", "me", "my", "of", "on", "or", "our", "ours",
+    "she", "so", "that", "the", "their", "them", "there", "these", "they",
+    "this", "those", "to", "us", "was", "we", "were", "what", "when",
+    "where", "which", "who", "why", "will", "with", "you", "your",
+}
+
+
+def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[str]:
+    """Bounded Mongo-only retrieval: no router LLM, embeddings, Pinecone or Neo4j."""
+    from .mongodb_connection import db
+
+    started = time.perf_counter()
+    tokens = [
+        token for token in re.findall(r"[a-z0-9_+#.-]{2,}", query.lower())
+        if token not in _RETRIEVAL_STOPWORDS
+    ]
+    if not tokens:
+        logger.info("RETRIEVAL_TIMING user_id=%s path=mongo_lexical total_ms=%.2f result_count=0",
+                    user_id, (time.perf_counter() - started) * 1000)
+        return []
+
+    # A hard cap keeps response time bounded even for users with large histories.
+    # Query by user_id/current state so MongoDB can use the compound index.
+    docs = list(
+        db["memories"].find(
+            {"user_id": user_id, "temporal.is_current": {"$ne": False}},
+            {"_id": 0, "content": 1, "type": 1, "temporal": 1, "entities": 1},
+        ).sort("temporal.valid_from", -1).limit(500)
+    )
+
+    query_terms = set(tokens)
+    scored = []
+    for doc in docs:
+        content = str(doc.get("content") or "")
+        if not content:
+            continue
+        content_lc = content.lower()
+        words = set(re.findall(r"[a-z0-9_+#.-]{2,}", content_lc))
+        overlap = query_terms & words
+        if not overlap:
+            continue
+        # Exact multiword phrases and rare/shared query terms get extra weight.
+        score = sum(2.0 if len(term) >= 6 else 1.0 for term in overlap)
+        score += 3.0 * sum(1 for term in tokens if term in content_lc and len(term) >= 5)
+        if len(tokens) > 1:
+            phrase = " ".join(tokens)
+            if phrase in content_lc:
+                score += 8.0
+        if doc.get("type") in {"profile", "project", "preference"}:
+            score += 0.25
+        scored.append((score, str(doc.get("temporal", {}).get("valid_from") or ""), content))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    results = []
+    seen = set()
+    for _, _, content in scored:
+        if content not in seen:
+            results.append(content)
+            seen.add(content)
+        if len(results) >= limit:
+            break
+
+    logger.info(
+        "RETRIEVAL_TIMING user_id=%s path=mongo_lexical total_ms=%.2f "
+        "scanned=%d matched=%d result_count=%d",
+        user_id, (time.perf_counter() - started) * 1000,
+        len(docs), len(scored), len(results),
+    )
+    return results
+
 def _source_role(source: str) -> str:
     if not isinstance(source, str) or not source.strip():
         raise ValueError("source must be a non-empty message role.")
@@ -538,93 +613,30 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         )
         return result
 
-    # Fast path: obvious personal-work questions use a deterministic retrieval
-    # plan and run the save decision separately, avoiding two serial routing LLM
-    # calls before returning the stored memory.
-    if _requires_personal_memory_lookup(user_input):
-        from .schema import MemoryRetrieval, RetivalTypes
-        from .retival_worker import retrieve_memory
-
-        _background_executor.submit(
-            _decide_and_save_background, user_id, user_input, role
-        )
-        result["memory_save_scheduled"] = True
-        result["retrieval"] = retrieve_memory(
-            user_query=user_input,
-            user_id=user_id,
-            converter_response=RetivalTypes(queries=[
-                MemoryRetrieval(query=(
-                    "What is the user's current job, role, employer, "
-                    "and relevant work context?"
-                ))
-            ]),
-        )
-        return result
-
-    from .prompts import memory_decision_prompt, query_converter_prompt
-    from .llms import MemoryDecisionGate, query_converter
-    from .worker import invoke_with_retry
-
-    # Run the gate and query conversion concurrently; cancel/ignore conversion
-    # when the gate says no retrieval is required.
-    converter_future = _routing_executor.submit(
-        invoke_with_retry,
-        query_converter,
-        [{"role": "system", "content": query_converter_prompt},
-         {"role": "user", "content": user_input}],
+    # Latency-first path: all user queries retrieve from MongoDB directly.
+    # Memory extraction/save decisions run in the background, never on the response path.
+    fast_started = time.perf_counter()
+    _background_executor.submit(
+        _decide_and_save_background, user_id, user_input, role
     )
-    decision = invoke_with_retry(
-        MemoryDecisionGate,
-        [{"role": "system", "content": memory_decision_prompt},
-         {"role": "user", "content": user_input}],
-    )
+    result["memory_save_scheduled"] = True
 
-    # Personal references such as "What do you think about my job?" require
-    # stored context even when the LLM decision gate mistakenly says otherwise.
-    # Keep this deterministic guard narrow to avoid retrieving for ordinary
-    # general-knowledge questions.
-    if role == "user" and _requires_personal_memory_lookup(user_input):
-        if not decision.needs_retrieval:
-            logger.info(
-                "Overriding retrieval gate for personal work reference"
-            )
-        decision.needs_retrieval = True
+    if _requires_personal_project_lookup(user_input):
+        logger.info("RETRIEVAL_PATH user_id=%s path=project_fast", user_id)
+        result["retrieval"] = _retrieve_project_memories_fast(user_id)
+        path = "project_fast"
+    elif _requires_personal_workplace_lookup(user_input):
+        logger.info("RETRIEVAL_PATH user_id=%s path=workplace_fast", user_id)
+        result["retrieval"] = _retrieve_workplace_memories_fast(user_id)
+        path = "workplace_fast"
+    else:
+        result["retrieval"] = _retrieve_memories_fast(user_id, user_input)
+        path = "mongo_lexical"
 
-    # Schedule extraction and saving BEFORE retrieval. This work must not delay
-    # the caller's retrieval result.
-    if decision.needs_saving:
-        _background_executor.submit(
-            _save_message_background,
-            user_id,
-            user_input,
-            role,
-            bool(decision.saving_needs_context),
-        )
-        result["memory_save_scheduled"] = True
-
-    if not decision.needs_retrieval:
-        if not converter_future.cancel():
-            converter_future.add_done_callback(_log_background_future)
-        return result
-
-    from .retival_worker import retrieve_memory
-    converter_response = converter_future.result()
-    if _requires_personal_memory_lookup(user_input):
-        # Do not let an empty or poorly rewritten converter result discard a
-        # clear personal-work lookup. Normalize it to a query the graph and
-        # semantic retrievers can answer from the user's stored memories.
-        from .schema import MemoryRetrieval, RetivalTypes
-        converter_response = RetivalTypes(queries=[
-            MemoryRetrieval(
-                query=(
-                    "What is the user's current job, role, employer, "
-                    "and relevant work context?"
-                )
-            )
-        ])
-    result["retrieval"] = retrieve_memory(
-        user_query=user_input,
-        user_id=user_id,
-        converter_response=converter_response,
+    logger.info(
+        "RETRIEVAL_TIMING user_id=%s path=%s total_ms=%.2f result_count=%d",
+        user_id, path, (time.perf_counter() - fast_started) * 1000,
+        len(result["retrieval"]),
     )
     return result
+
