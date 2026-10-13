@@ -713,17 +713,21 @@ def _fallback_personal_work_plan(q_text: str, user_id: str) -> RetrievalPlan | N
 
 def _process_single_query(q_text: str, user_id: str) -> list[dict]:
     try:
-        try:
-            retrieval_plan = get_retrieval_plan(q_text)
-        except Exception:
-            retrieval_plan = _fallback_personal_work_plan(q_text, user_id)
-            if retrieval_plan is None:
-                raise
-            logger.warning(
-                "Retrieval planner failed; using deterministic personal-work plan "
-                "for user_id=%s",
-                user_id,
-            )
+        # Use deterministic plans for known personal-work queries before calling
+        # the remote planner; this removes one network LLM round trip.
+        retrieval_plan = _fallback_personal_work_plan(q_text, user_id)
+        if retrieval_plan is None:
+            try:
+                retrieval_plan = get_retrieval_plan(q_text)
+            except Exception:
+                retrieval_plan = _fallback_personal_work_plan(q_text, user_id)
+                if retrieval_plan is None:
+                    raise
+                logger.warning(
+                    "Retrieval planner failed; using deterministic personal-work plan "
+                    "for user_id=%s",
+                    user_id,
+                )
         logger.debug("Retrieval plan for %r: %s", q_text, retrieval_plan)
 
         results, effective_type = retrieve(retrieval_plan, user_id)
