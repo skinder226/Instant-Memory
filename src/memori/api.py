@@ -306,6 +306,28 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                          user_id, role)
 
 
+def _decide_and_save_background(user_id: str, user_input: str, role: str) -> None:
+    """Run the save decision off the latency-sensitive retrieval path."""
+    try:
+        from .prompts import memory_decision_prompt
+        from .llms import MemoryDecisionGate
+        from .worker import invoke_with_retry
+
+        decision = invoke_with_retry(
+            MemoryDecisionGate,
+            [{"role": "system", "content": memory_decision_prompt},
+             {"role": "user", "content": user_input}],
+        )
+        if decision.needs_saving:
+            _save_message_background(
+                user_id, user_input, role, bool(decision.saving_needs_context)
+            )
+    except Exception:
+        logger.exception(
+            "Background decision/save failed for user_id=%s", user_id
+        )
+
+
 def _log_background_future(future):
     try:
         future.result()
@@ -342,6 +364,29 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
             _save_message_background, user_id, user_input, role, True,
         )
         result["memory_save_scheduled"] = True
+        return result
+
+    # Fast path: obvious personal-work questions use a deterministic retrieval
+    # plan and run the save decision separately, avoiding two serial routing LLM
+    # calls before returning the stored memory.
+    if _requires_personal_memory_lookup(user_input):
+        from .schema import MemoryRetrieval, RetivalTypes
+        from .retival_worker import retrieve_memory
+
+        _background_executor.submit(
+            _decide_and_save_background, user_id, user_input, role
+        )
+        result["memory_save_scheduled"] = True
+        result["retrieval"] = retrieve_memory(
+            user_query=user_input,
+            user_id=user_id,
+            converter_response=RetivalTypes(queries=[
+                MemoryRetrieval(query=(
+                    "What is the user's current job, role, employer, "
+                    "and relevant work context?"
+                ))
+            ]),
+        )
         return result
 
     from .prompts import memory_decision_prompt, query_converter_prompt
