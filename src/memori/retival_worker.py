@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from bson.objectid import ObjectId
@@ -126,14 +127,26 @@ def Retrieval_for_Pinecone(
     if plan.memory_type:
         filters["memory_type"] = plan.memory_type
 
+    started = time.perf_counter()
+    embedding_started = time.perf_counter()
     embedding = embeddings.embed_query(plan.query)
+    embedding_ms = (time.perf_counter() - embedding_started) * 1000
 
+    query_started = time.perf_counter()
     results = index.query(
         vector=embedding,
         top_k=top_k or plan.top_k,
         namespace=user_id,
         filter=filters,
         include_metadata=True,
+    )
+    query_ms = (time.perf_counter() - query_started) * 1000
+    logger.info(
+        "DB_TIMING database=pinecone operation=query user_id=%s embedding_ms=%.2f "
+        "query_ms=%.2f total_ms=%.2f matches=%d",
+        user_id, embedding_ms, query_ms,
+        (time.perf_counter() - started) * 1000,
+        len(results.matches or []),
     )
 
     candidates = []
@@ -748,7 +761,12 @@ def _process_single_query(q_text: str, user_id: str) -> list[dict]:
 def retrieve_memory(user_query: str, user_id: str, converter_response=None):
     # Nothing stored yet (e.g. a brand-new user): skip every LLM call,
     # Pinecone query and Neo4j query.
+    retrieval_started = time.perf_counter()
     if not user_has_memories(user_id):
+        logger.info(
+            "RETRIEVAL_TIMING user_id=%s total_ms=%.2f result_count=0 reason=no_memories",
+            user_id, (time.perf_counter() - retrieval_started) * 1000,
+        )
         logger.debug("No memories stored for user_id=%s; skipping retrieval", user_id)
         return []
 
@@ -786,4 +804,9 @@ def retrieve_memory(user_query: str, user_id: str, converter_response=None):
             unique_docs.append(doc["content"] if "content" in doc else doc)
 
     logger.debug("Final retrieval result count: %d unique documents", len(unique_docs))
+    logger.info(
+        "RETRIEVAL_TIMING user_id=%s total_ms=%.2f query_count=%d result_count=%d",
+        user_id, (time.perf_counter() - retrieval_started) * 1000,
+        len(query_texts), len(unique_docs),
+    )
     return unique_docs
