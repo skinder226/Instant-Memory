@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from dotenv import load_dotenv
@@ -7,6 +8,9 @@ from langchain_groq import ChatGroq
 # Fixed import here:
 from langchain_core.messages import SystemMessage, HumanMessage
 from memori import memori
+
+# Show per-database latency diagnostics emitted by the memory pipeline.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # Load variables from your local .env file securely
 load_dotenv()
