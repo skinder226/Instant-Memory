@@ -410,6 +410,7 @@ def Graph_Traversal(
     user_id: str,
 ) -> list[dict]:
     """Batch each hop by start-node label and cap returned graph rows."""
+    graph_started = time.perf_counter()
     is_current = plan.is_current
     hops = _build_hops(plan)
     all_results = []
@@ -549,6 +550,12 @@ def Graph_Traversal(
             )
         current_nodes = next_nodes
 
+    logger.info(
+        "DB_TIMING database=neo4j operation=graph_traversal user_id=%s "
+        "anchors=%d hops=%d rows=%d duration_ms=%.2f",
+        user_id, len(resolved_anchors), len(hops), len(all_results),
+        (time.perf_counter() - graph_started) * 1000,
+    )
     return all_results
 
 # ---------------------------------------------------------------------------
