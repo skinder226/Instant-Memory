@@ -512,21 +512,35 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     # memories from MongoDB directly, avoiding decision/converter LLM calls,
     # embeddings, Pinecone, and Neo4j on this common lookup.
     if _requires_personal_project_lookup(user_input):
+        fast_started = time.perf_counter()
+        logger.info("RETRIEVAL_PATH user_id=%s path=project_fast", user_id)
         _background_executor.submit(
             _decide_and_save_background, user_id, user_input, role
         )
         result["memory_save_scheduled"] = True
         result["retrieval"] = _retrieve_project_memories_fast(user_id)
+        logger.info(
+            "RETRIEVAL_TIMING user_id=%s path=project_fast total_ms=%.2f result_count=%d",
+            user_id, (time.perf_counter() - fast_started) * 1000,
+            len(result["retrieval"]),
+        )
         return result
 
     # Direct workplace questions need only the current workplace fact from MongoDB.
     # Avoid the embedding, Pinecone, and Neo4j network calls for this simple lookup.
     if _requires_personal_workplace_lookup(user_input):
+        fast_started = time.perf_counter()
+        logger.info("RETRIEVAL_PATH user_id=%s path=workplace_fast", user_id)
         _background_executor.submit(
             _decide_and_save_background, user_id, user_input, role
         )
         result["memory_save_scheduled"] = True
         result["retrieval"] = _retrieve_workplace_memories_fast(user_id)
+        logger.info(
+            "RETRIEVAL_TIMING user_id=%s path=workplace_fast total_ms=%.2f result_count=%d",
+            user_id, (time.perf_counter() - fast_started) * 1000,
+            len(result["retrieval"]),
+        )
         return result
 
     # Fast path: obvious personal-work questions use a deterministic retrieval
