@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
@@ -12,6 +13,27 @@ from pymongo import UpdateOne
 logger = logging.getLogger(__name__)
 _background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memori-ingest")
 _routing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori-routing")
+
+
+_PERSONAL_WORK_REFERENCE_RE = re.compile(
+    r"\\bmy\\s+(?:job|work|career|position|role|employer|company|workplace|employment)\\b",
+    re.IGNORECASE,
+)
+
+
+def _requires_personal_memory_lookup(message: str) -> bool:
+    """Catch personal work references that a probabilistic decision gate may miss."""
+    text = message.strip()
+    if not text:
+        return False
+    has_personal_work_reference = bool(_PERSONAL_WORK_REFERENCE_RE.search(text))
+    asks_for_information = bool(re.search(
+        r"\\b(what|where|who|which|how|why|think|opinion|feel|tell|describe|"
+        r"recommend|advice|should|could|would|is|are|do|does|did)\\b",
+        text,
+        re.IGNORECASE,
+    ))
+    return has_personal_work_reference and asks_for_information
 
 
 def _source_role(source: str) -> str:
@@ -339,6 +361,17 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         [{"role": "system", "content": memory_decision_prompt},
          {"role": "user", "content": user_input}],
     )
+
+    # Personal references such as "What do you think about my job?" require
+    # stored context even when the LLM decision gate mistakenly says otherwise.
+    # Keep this deterministic guard narrow to avoid retrieving for ordinary
+    # general-knowledge questions.
+    if role == "user" and _requires_personal_memory_lookup(user_input):
+        if not decision.needs_retrieval:
+            logger.info(
+                "Overriding retrieval gate for personal work reference"
+            )
+        decision.needs_retrieval = True
 
     # Schedule extraction and saving BEFORE retrieval. This work must not delay
     # the caller's retrieval result.
