@@ -17,9 +17,9 @@ _routing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori
 
 
 _PERSONAL_PROJECT_QUESTION_RE = re.compile(
-    r"\\b(?:what|which|name)\\b.{0,45}\\bproject\\b|"
-    r"\\bwhat\\b.{0,25}\\b(?:i am|i'm|im)\\s+working\\s+on\\b|"
-    r"\\bwhich\\s+project\\s+(?:am i|i am|i'm|im)\\s+working\\s+on\\b",
+    r"\b(?:what|which|name)\b.{0,45}\bproject\b|"
+    r"\bwhat\b.{0,25}\b(?:i am|i'm|im)\s+working\s+on\b|"
+    r"\bwhich\s+project\s+(?:am i|i am|i'm|im)\s+working\s+on\b",
     re.IGNORECASE,
 )
 
