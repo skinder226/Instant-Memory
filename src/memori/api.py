@@ -61,49 +61,70 @@ def _requires_personal_workplace_lookup(message: str) -> bool:
 
 
 def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
-    """Fetch workplace facts using the indexed user/current-memory filter.
+    """Retrieve current workplace facts with selective MongoDB queries.
 
-    Avoid unanchored MongoDB regex/$or scans across the whole collection.
-    Filter the current user's small memory set in Python instead.
+    First use the explicit entity relationship, then fall back to workplace
+    wording in the user's own current memories. MongoDB remains the source of
+    truth; no LLM, embedding, Pinecone, or Neo4j call is on this path.
     """
     from .mongodb_connection import db
 
+    collection = db["memories"]
+    projection = {"content": 1, "type": 1, "entities": 1, "temporal": 1}
+    base_filter = {
+        "user_id": user_id,
+        "temporal.is_current": {"$ne": False},
+    }
     started = time.perf_counter()
-    docs = list(db["memories"].find(
+
+    # Best path: match the structured relationship directly. This is backed
+    # by the compound index added for entities.relationship.
+    query_started = time.perf_counter()
+    docs = list(collection.find(
         {
-            "user_id": user_id,
-            "temporal.is_current": {"$ne": False},
+            **base_filter,
+            "entities.relationship": {
+                "$in": ["works_at", "works for", "employed_at", "employed_by"]
+            },
         },
-        {"content": 1, "type": 1, "entities": 1, "temporal": 1},
-    ).limit(200))
+        projection,
+    ).limit(20))
+    structured_ms = (time.perf_counter() - query_started) * 1000
 
-    workplace_docs = []
-    for doc in docs:
-        entities = doc.get("entities") or []
-        has_workplace_entity = any(
+    # Fallback: support older memories that contain the fact only in text.
+    # Do not limit an unrelated batch before filtering it, which could omit
+    # the correct workplace fact when a user's memory store grows.
+    text_ms = 0.0
+    if not docs:
+        query_started = time.perf_counter()
+        docs = list(collection.find(
+            {
+                **base_filter,
+                "content": {
+                    "$regex": r"\\b(?:works at|work at|working at|employed at|works for|work for)\\b",
+                    "$options": "i",
+                },
+            },
+            projection,
+        ).limit(20))
+        text_ms = (time.perf_counter() - query_started) * 1000
+
+    docs.sort(key=lambda doc: (
+        0 if any(
             isinstance(entity, dict)
-            and str(entity.get("relationship", "")).lower() in {
-                "works_at", "works for", "employed_at", "employed_by"
-            }
-            for entity in entities
-        )
-        content = str(doc.get("content") or "")
-        has_workplace_content = bool(re.search(
-            r"\b(?:works at|work at|working at|employed at|works for|work for)\b",
-            content,
-            re.IGNORECASE,
-        ))
-        if has_workplace_entity or has_workplace_content:
-            workplace_docs.append((doc, has_workplace_entity))
-
-    workplace_docs.sort(key=lambda item: (
-        0 if item[1] else 1,
-        0 if item[0].get("type") == "profile" else 1,
+            and str(entity.get("relationship", "")).lower()
+            in {"works_at", "works for", "employed_at", "employed_by"}
+            for entity in (doc.get("entities") or [])
+        ) else 1,
+        0 if doc.get("type") == "profile" else 1,
     ))
-    results = [doc["content"] for doc, _ in workplace_docs if doc.get("content")][:10]
-    logger.info(
-        "Workplace Mongo lookup user_id=%s docs_scanned=%d results=%d elapsed_ms=%.1f",
-        user_id, len(docs), len(results), (time.perf_counter() - started) * 1000,
+    results = [doc["content"] for doc in docs if doc.get("content")][:10]
+
+    logger.warning(
+        "WORKPLACE_RETRIEVAL_TIMING user_id=%s structured_query_ms=%.1f "
+        "text_fallback_ms=%.1f results=%d total_ms=%.1f",
+        user_id, structured_ms, text_ms, len(results),
+        (time.perf_counter() - started) * 1000,
     )
     return results
 
