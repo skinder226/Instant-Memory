@@ -131,10 +131,14 @@ retrieval QUESTION about what is already known on that topic.
 WHAT COUNTS AS AN ATTRIBUTE
 ============================================================
 Personal attributes include: name, age, location, occupation, role,
-employer/company, projects, collaborators/friends/family, tools,
-languages, databases, frameworks, hardware, preferences (likes,
-dislikes, favorites), goals, tasks, events, moods/experiences, and
-workflows/methods.
+employer/company, job/work/career, workplace, projects,
+collaborators/friends/family, tools, languages, databases, frameworks,
+hardware, preferences (likes, dislikes, favorites), goals, tasks, events,
+moods/experiences, and workflows/methods.
+Questions asking for an opinion or advice about "my job", "my work", "my
+career", "my role", or "my company" still need retrieval: first retrieve
+the user's stored role, employer, projects, and relevant work context so
+the answer is personalized. Do not return an empty query list for these.
 
 ============================================================
 COMPOUND / MULTI-ATTRIBUTE MESSAGES
@@ -145,9 +149,14 @@ COMPOUND / MULTI-ATTRIBUTE MESSAGES
   and combining loses no specificity (e.g. company + role -> one
   query; name + workplace -> one query). Unrelated attributes stay
   separate (e.g. company and database are two queries).
-- Vague references ("my company", "my project", "my db", "my friend")
+- Vague references ("my job", "my work", "my career", "my role",
+  "my employer", "my company", "my project", "my db", "my friend")
   still count as attributes even with no value given. Include them;
   retrieval's job is to resolve them.
+- For "What do you think about my job/work/career?" retrieve the user's
+  current role/employer and relevant current projects or work facts. Use a
+  focused query such as "What is the user's current job, role, employer,
+  and relevant work context?" Never return {"queries": []} for this case.
 - A named person (friend, colleague, family member) mentioned in
   relation to the user is an attribute: write a query about that
   person and their relation to the user.
@@ -503,6 +512,8 @@ they use, preferences, goals, tasks, events, moods, and things people said.
 TRUE when the user asks a question or makes a request whose answer depends
 on what is already stored:
 - "What is my name?", "Where do I work?", "Who works with me?"
+- "What do you think about my job?", "How am I doing at work?",
+  "Give me advice about my career." These require stored work context first.
 - "What project am I building?", "Tell me about Neo.", "Who is Fasil?"
 - "What did Ali say about the memory system?"
 - "Which database should I use for my project?" (personalized)
