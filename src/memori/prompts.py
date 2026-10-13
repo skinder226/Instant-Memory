@@ -156,7 +156,7 @@ COMPOUND / MULTI-ATTRIBUTE MESSAGES
 - For "What do you think about my job/work/career?" retrieve the user's
   current role/employer and relevant current projects or work facts. Use a
   focused query such as "What is the user's current job, role, employer,
-  and relevant work context?" Never return {"queries": []} for this case.
+  and relevant work context?" Never return {{"queries": []}} for this case.
 - A named person (friend, colleague, family member) mentioned in
   relation to the user is an attribute: write a query about that
   person and their relation to the user.
