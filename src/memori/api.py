@@ -15,6 +15,38 @@ _background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mem
 _routing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori-routing")
 
 
+
+_PERSONAL_PROJECT_QUESTION_RE = re.compile(
+    r"\\b(?:what|which|name)\\b.{0,45}\\bproject\\b|"
+    r"\\bwhat\\b.{0,25}\\b(?:i am|i'm|im)\\s+working\\s+on\\b|"
+    r"\\bwhich\\s+project\\s+(?:am i|i am|i'm|im)\\s+working\\s+on\\b",
+    re.IGNORECASE,
+)
+
+
+def _requires_personal_project_lookup(message: str) -> bool:
+    """Recognize direct questions about the user's current project."""
+    return bool(_PERSONAL_PROJECT_QUESTION_RE.search(message.strip()))
+
+
+def _retrieve_project_memories_fast(user_id: str) -> list[str]:
+    """Use the source-of-truth Mongo collection instead of remote LLM/vector calls."""
+    from .mongodb_connection import db
+
+    docs = list(db["memories"].find(
+        {
+            "user_id": user_id,
+            "temporal.is_current": {"$ne": False},
+            "$or": [
+                {"type": "project"},
+                {"content": {"$regex": r"project|working on|works on|built at", "$options": "i"}},
+            ],
+        },
+        {"content": 1, "type": 1, "temporal": 1},
+    ).limit(12))
+    docs.sort(key=lambda doc: 0 if doc.get("type") == "project" else 1)
+    return [doc["content"] for doc in docs if doc.get("content")]
+
 _PERSONAL_WORK_REFERENCE_RE = re.compile(
     r"\b(?:my|may)\s+(?:job|work|career|position|role|employer|company|workplace|employment)\b",
     re.IGNORECASE,
@@ -364,6 +396,17 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
             _save_message_background, user_id, user_input, role, True,
         )
         result["memory_save_scheduled"] = True
+        return result
+
+    # Fast path for direct project questions: read the user's current project
+    # memories from MongoDB directly, avoiding decision/converter LLM calls,
+    # embeddings, Pinecone, and Neo4j on this common lookup.
+    if _requires_personal_project_lookup(user_input):
+        _background_executor.submit(
+            _decide_and_save_background, user_id, user_input, role
+        )
+        result["memory_save_scheduled"] = True
+        result["retrieval"] = _retrieve_project_memories_fast(user_id)
         return result
 
     # Fast path: obvious personal-work questions use a deterministic retrieval
