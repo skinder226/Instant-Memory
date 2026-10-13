@@ -49,6 +49,11 @@ def ensure_indexes(memory_types=None, include_outbox=True):
                  ("temporal.is_current", ASCENDING)],
                 name="user_type_current_idx",
             )
+            memories.create_index(
+                [("user_id", ASCENDING), ("temporal.is_current", ASCENDING),
+                 ("entities.relationship", ASCENDING)],
+                name="user_current_entity_relationship_idx",
+            )
             _memories_indexes_ready = True
 
         if include_outbox and not _outbox_basic_ready:
