@@ -1,13 +1,37 @@
-from pymongo import MongoClient
+from pymongo import MongoClient, monitoring
+import logging
 import os
+import threading
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
 
-connection_string = os.getenv("mongodb_URI")
+logger = logging.getLogger(__name__)
 
-# Connect to MongoDB
-client = MongoClient(connection_string)
+class _MongoTimingListener(monitoring.CommandListener):
+    """Log MongoDB command latency without changing query results."""
+    def __init__(self):
+        self._started = {}
+        self._lock = threading.Lock()
+    def started(self, event):
+        with self._lock:
+            self._started[event.request_id] = time.perf_counter()
+    def succeeded(self, event):
+        with self._lock:
+            started = self._started.pop(event.request_id, None)
+        if started is not None:
+            logger.info("DB_TIMING database=mongodb command=%s duration_ms=%.2f status=ok", event.command_name, (time.perf_counter() - started) * 1000)
+    def failed(self, event):
+        with self._lock:
+            started = self._started.pop(event.request_id, None)
+        if started is not None:
+            logger.warning("DB_TIMING database=mongodb command=%s duration_ms=%.2f status=error failure=%s", event.command_name, (time.perf_counter() - started) * 1000, event.failure)
+
+connection_string = os.getenv("mongodb_URI")
+# PyMongo connects lazily; the first command includes initial connection/setup delay.
+_mongo_timing_listener = _MongoTimingListener()
+client = MongoClient(connection_string, event_listeners=[_mongo_timing_listener])
 
 # Select/Create database
 db = client["memories"]
