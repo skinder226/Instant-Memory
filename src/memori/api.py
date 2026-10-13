@@ -101,7 +101,7 @@ def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
             {
                 **base_filter,
                 "content": {
-                    "$regex": r"\\b(?:works at|work at|working at|employed at|works for|work for)\\b",
+                    "$regex": r"\b(?:works at|work at|working at|employed at|works for|work for)\b",
                     "$options": "i",
                 },
             },
