@@ -122,7 +122,7 @@ class Entity(BaseModel):
         )
     )
 
-    
+    properties: RelationshipProperties = Field(default_factory=RelationshipProperties)
 
 
 # ============================================================
