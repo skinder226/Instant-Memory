@@ -392,6 +392,19 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
 
     from .retival_worker import retrieve_memory
     converter_response = converter_future.result()
+    if _requires_personal_memory_lookup(user_input):
+        # Do not let an empty or poorly rewritten converter result discard a
+        # clear personal-work lookup. Normalize it to a query the graph and
+        # semantic retrievers can answer from the user's stored memories.
+        from .schema import MemoryRetrieval, RetivalTypes
+        converter_response = RetivalTypes(queries=[
+            MemoryRetrieval(
+                query=(
+                    "What is the user's current job, role, employer, "
+                    "and relevant work context?"
+                )
+            )
+        ])
     result["retrieval"] = retrieve_memory(
         user_query=user_input,
         user_id=user_id,
