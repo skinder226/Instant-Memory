@@ -135,15 +135,31 @@ def _process_pinecone(user_id, work_items):
     # per outbox event so a failed item can be retried independently.
     for start in range(0, len(work_items), PINECONE_BATCH_SIZE):
         batch = work_items[start:start + PINECONE_BATCH_SIZE]
+        batch_started = time.perf_counter()
         try:
             contents = [memory["content"] for memory, _ in batch]
+            embedding_started = time.perf_counter()
             embedded = embeddings.embed_documents(contents)
+            embedding_ms = (time.perf_counter() - embedding_started) * 1000
             vectors = [
                 _pinecone_vector(memory, values)
                 for (memory, _), values in zip(batch, embedded)
             ]
+            upsert_started = time.perf_counter()
             index.upsert(vectors=vectors, namespace=user_id)
+            upsert_ms = (time.perf_counter() - upsert_started) * 1000
+            logger.info(
+                "SAVE_TIMING database=pinecone operation=upsert user_id=%s items=%d "
+                "embedding_ms=%.2f upsert_ms=%.2f total_ms=%.2f",
+                user_id, len(batch), embedding_ms, upsert_ms,
+                (time.perf_counter() - batch_started) * 1000,
+            )
         except Exception as exc:
+            logger.warning(
+                "SAVE_TIMING database=pinecone operation=upsert user_id=%s items=%d "
+                "status=error elapsed_ms=%.2f",
+                user_id, len(batch), (time.perf_counter() - batch_started) * 1000,
+            )
             logger.exception("Pinecone batch failed for user_id=%s", user_id)
             for memory, _ in batch:
                 set_memory_error_or_attempts(user_id, memory["_id"], "pinecone", exc)
@@ -162,16 +178,28 @@ def _process_pinecone(user_id, work_items):
 def _process_neo4j(user_id, work_items):
     for memory, supersedes in work_items:
         mongo_id = memory["_id"]
+        neo4j_started = time.perf_counter()
         try:
             set_memory_to_neo4j(memory, user_id)
             set_memory_to_neo4j_supersedes(user_id, [supersedes])
             set_memory_status(user_id, mongo_id, "neo4j", "completed")
+            logger.info(
+                "SAVE_TIMING database=neo4j operation=save_memory user_id=%s "
+                "memory_id=%s duration_ms=%.2f status=ok",
+                user_id, mongo_id, (time.perf_counter() - neo4j_started) * 1000,
+            )
         except Exception as exc:
+            logger.warning(
+                "SAVE_TIMING database=neo4j operation=save_memory user_id=%s "
+                "memory_id=%s duration_ms=%.2f status=error",
+                user_id, mongo_id, (time.perf_counter() - neo4j_started) * 1000,
+            )
             logger.exception("Neo4j failed for %s", mongo_id)
             set_memory_error_or_attempts(user_id, mongo_id, "neo4j", exc)
 
 
 def _save_pending_memory_worker(user_id):
+    worker_started = time.perf_counter()
     with _get_user_lock(user_id):
         pending = find_pending_memory(user_id)
         pinecone_work = []
@@ -213,6 +241,12 @@ def _save_pending_memory_worker(user_id):
             futures.append(_provider_executor.submit(_process_neo4j, user_id, neo4j_work))
         for future in futures:
             future.result()
+        logger.info(
+            "SAVE_TIMING operation=sync_pending user_id=%s pending=%d "
+            "pinecone_items=%d neo4j_items=%d total_ms=%.2f",
+            user_id, len(pending), len(pinecone_work), len(neo4j_work),
+            (time.perf_counter() - worker_started) * 1000,
+        )
 
 
 def _log_future(future):
