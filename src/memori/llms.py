@@ -62,6 +62,7 @@ if mem_llm_provider in openai_compatible_providers:
         api_key=Mem_llm_Api,
         temperature=0,
         base_url=Mem_base_url,
+        max_retries=0,  # Use our bounded retry policy instead of SDK's long 18s backoff.
     )
 
     # Optionally route lightweight classification/planning calls through a
@@ -73,6 +74,7 @@ if mem_llm_provider in openai_compatible_providers:
         api_key=Mem_llm_Api,
         temperature=0,
         base_url=Mem_base_url,
+        max_retries=0,  # Prevent hidden SDK retries from multiplying latency.
     )
 
 
