@@ -18,9 +18,10 @@ _routing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori
 
 
 _PERSONAL_PROJECT_QUESTION_RE = re.compile(
-    r"\b(?:what|which|name)\b.{0,45}\bproject\b|"
-    r"\bwhat\b.{0,25}\b(?:i am|i'm|im)\s+working\s+on\b|"
-    r"\bwhich\s+project\s+(?:am i|i am|i'm|im)\s+working\s+on\b",
+    r"\b(?:what|which|name)\b.{0,60}\bproject\b|"
+    r"\b(?:what|which)\b.{0,40}\b(?:project|app|system|product)\b.{0,50}\b(?:i|we)\s+(?:am|are|'m|'re)?\s*(?:working|building|developing|making)\b|"
+    r"\b(?:what|which)\b.{0,35}\b(?:i|we)\s+(?:am|are|'m|'re)?\s*(?:working|building|developing)\s+on\b|"
+    r"\b(?:which|what)\s+project\s+(?:am i|i am|i'm|im|are we|we are|we're)\s+working\s+on\b",
     re.IGNORECASE,
 )
 
@@ -31,22 +32,50 @@ def _requires_personal_project_lookup(message: str) -> bool:
 
 
 def _retrieve_project_memories_fast(user_id: str) -> list[str]:
-    """Use the source-of-truth Mongo collection instead of remote LLM/vector calls."""
+    """Retrieve current project memories from MongoDB without routing LLM calls."""
     from .mongodb_connection import db
 
-    docs = list(db["memories"].find(
-        {
-            "user_id": user_id,
-            "temporal.is_current": {"$ne": False},
-            "$or": [
-                {"type": "project"},
-                {"content": {"$regex": r"project|working on|works on|built at", "$options": "i"}},
-            ],
-        },
-        {"content": 1, "type": 1, "temporal": 1},
-    ).limit(12))
-    docs.sort(key=lambda doc: 0 if doc.get("type") == "project" else 1)
-    return [doc["content"] for doc in docs if doc.get("content")]
+    collection = db["memories"]
+    base_filter = {
+        "user_id": user_id,
+        "temporal.is_current": {"$ne": False},
+    }
+    projection = {"content": 1, "type": 1, "temporal": 1}
+    started = time.perf_counter()
+
+    # Keep the common query index-friendly; don't combine it with a regex OR.
+    query_started = time.perf_counter()
+    docs = list(collection.find(
+        {**base_filter, "type": "project"},
+        projection,
+    ).sort("temporal.valid_from", -1).limit(12))
+    structured_ms = (time.perf_counter() - query_started) * 1000
+
+    # Legacy data may have project facts stored under another type.
+    text_ms = 0.0
+    if not docs:
+        query_started = time.perf_counter()
+        docs = list(collection.find(
+            {
+                **base_filter,
+                "content": {
+                    "$regex": r"\b(?:project|working on|works on|building|built at)\b",
+                    "$options": "i",
+                },
+            },
+            projection,
+        ).sort("temporal.valid_from", -1).limit(12))
+        text_ms = (time.perf_counter() - query_started) * 1000
+
+    results = [doc["content"] for doc in docs if doc.get("content")]
+    logger.warning(
+        "PROJECT_RETRIEVAL_TIMING user_id=%s structured_query_ms=%.1f "
+        "text_fallback_ms=%.1f results=%d total_ms=%.1f path=%s",
+        user_id, structured_ms, text_ms, len(results),
+        (time.perf_counter() - started) * 1000,
+        "structured" if structured_ms and not text_ms else "text_fallback",
+    )
+    return results
 
 _PERSONAL_WORKPLACE_QUESTION_RE = re.compile(
     r"\bwhere\b.{0,35}\b(?:i|im|i'm|am i)\b.{0,25}\b(?:work|working|employed)\b|"
