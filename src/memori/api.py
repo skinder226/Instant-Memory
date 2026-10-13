@@ -47,6 +47,42 @@ def _retrieve_project_memories_fast(user_id: str) -> list[str]:
     docs.sort(key=lambda doc: 0 if doc.get("type") == "project" else 1)
     return [doc["content"] for doc in docs if doc.get("content")]
 
+_PERSONAL_WORKPLACE_QUESTION_RE = re.compile(
+    r"\bwhere\b.{0,35}\b(?:i|im|i'm|am i)\b.{0,25}\b(?:work|working|employed)\b|"
+    r"\bwhere\s+(?:do|does)\s+(?:i|the user)\s+work\b|"
+    r"\b(?:who|which company)\b.{0,30}\b(?:employs|employer|work for)\b",
+    re.IGNORECASE,
+)
+
+
+def _requires_personal_workplace_lookup(message: str) -> bool:
+    return bool(_PERSONAL_WORKPLACE_QUESTION_RE.search(message.strip()))
+
+
+def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
+    """Fetch current workplace facts from MongoDB without remote retrieval services."""
+    from .mongodb_connection import db
+
+    docs = list(db["memories"].find(
+        {
+            "user_id": user_id,
+            "temporal.is_current": {"$ne": False},
+            "$or": [
+                {"entities": {"$elemMatch": {"relationship": "works_at"}}},
+                {"content": {"$regex": r"\b(?:works at|work at|working at|employed at|works for|work for)\b", "$options": "i"}},
+            ],
+        },
+        {"content": 1, "type": 1, "entities": 1, "temporal": 1},
+    ).limit(10))
+    docs.sort(key=lambda doc: (
+        0 if any(
+            isinstance(entity, dict) and entity.get("relationship") == "works_at"
+            for entity in (doc.get("entities") or [])
+        ) else 1,
+        0 if doc.get("type") == "profile" else 1,
+    ))
+    return [doc["content"] for doc in docs if doc.get("content")]
+
 _PERSONAL_WORK_REFERENCE_RE = re.compile(
     r"\b(?:my|may)\s+(?:job|work|career|position|role|employer|company|workplace|employment)\b",
     re.IGNORECASE,
@@ -407,6 +443,16 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         )
         result["memory_save_scheduled"] = True
         result["retrieval"] = _retrieve_project_memories_fast(user_id)
+        return result
+
+    # Direct workplace questions need only the current workplace fact from MongoDB.
+    # Avoid the embedding, Pinecone, and Neo4j network calls for this simple lookup.
+    if _requires_personal_workplace_lookup(user_input):
+        _background_executor.submit(
+            _decide_and_save_background, user_id, user_input, role
+        )
+        result["memory_save_scheduled"] = True
+        result["retrieval"] = _retrieve_workplace_memories_fast(user_id)
         return result
 
     # Fast path: obvious personal-work questions use a deterministic retrieval
