@@ -16,7 +16,7 @@ _routing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori
 
 
 _PERSONAL_WORK_REFERENCE_RE = re.compile(
-    r"\bmy\s+(?:job|work|career|position|role|employer|company|workplace|employment)\b",
+    r"\b(?:my|may)\s+(?:job|work|career|position|role|employer|company|workplace|employment)\b",
     re.IGNORECASE,
 )
 
