@@ -190,29 +190,41 @@ _RETRIEVAL_STOPWORDS = {
 }
 
 
-def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[str]:
-    """Bounded Mongo-only retrieval: no router LLM, embeddings, Pinecone or Neo4j."""
-    from .mongodb_connection import db
+_USER_MEMORY_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_USER_MEMORY_CACHE_LOCK = threading.Lock()
+_USER_MEMORY_CACHE_TTL_SECONDS = 3.0
 
+
+def _get_current_user_memories(user_id: str) -> list[dict]:
+    """Reuse a short-lived per-user snapshot to avoid a Mongo round-trip per turn."""
+    now = time.monotonic()
+    with _USER_MEMORY_CACHE_LOCK:
+        cached = _USER_MEMORY_CACHE.get(user_id)
+        if cached and now - cached[0] < _USER_MEMORY_CACHE_TTL_SECONDS:
+            return cached[1]
+
+    from .mongodb_connection import db
+    docs = list(db["memories"].find(
+        {"user_id": user_id, "temporal.is_current": {"$ne": False}},
+        {"_id": 0, "content": 1, "type": 1, "temporal": 1, "entities": 1},
+    ).sort("temporal.valid_from", -1))
+
+    with _USER_MEMORY_CACHE_LOCK:
+        _USER_MEMORY_CACHE[user_id] = (time.monotonic(), docs)
+    return docs
+
+
+def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[str]:
+    """Fast local lexical ranking over a cached snapshot of all current user memories."""
     started = time.perf_counter()
     tokens = [
         token for token in re.findall(r"[a-z0-9_+#.-]{2,}", query.lower())
         if token not in _RETRIEVAL_STOPWORDS
     ]
     if not tokens:
-        logger.info("RETRIEVAL_TIMING user_id=%s path=mongo_lexical total_ms=%.2f result_count=0",
-                    user_id, (time.perf_counter() - started) * 1000)
         return []
 
-    # A hard cap keeps response time bounded even for users with large histories.
-    # Query by user_id/current state so MongoDB can use the compound index.
-    docs = list(
-        db["memories"].find(
-            {"user_id": user_id, "temporal.is_current": {"$ne": False}},
-            {"_id": 0, "content": 1, "type": 1, "temporal": 1, "entities": 1},
-        ).sort("temporal.valid_from", -1).limit(500)
-    )
-
+    docs = _get_current_user_memories(user_id)
     query_terms = set(tokens)
     scored = []
     for doc in docs:
@@ -224,20 +236,31 @@ def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[st
         overlap = query_terms & words
         if not overlap:
             continue
-        # Exact multiword phrases and rare/shared query terms get extra weight.
+
         score = sum(2.0 if len(term) >= 6 else 1.0 for term in overlap)
-        score += 3.0 * sum(1 for term in tokens if term in content_lc and len(term) >= 5)
-        if len(tokens) > 1:
-            phrase = " ".join(tokens)
-            if phrase in content_lc:
-                score += 8.0
+        score += 3.0 * sum(1 for term in tokens if term in words and len(term) >= 5)
+        # Strongly prefer exact phrase matches, but don't require them.
+        normalized_query = " ".join(tokens)
+        if normalized_query in content_lc:
+            score += 10.0
+        # Prefer structured relationship matches for entity/action questions.
+        entities = doc.get("entities") or []
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            relation = str(entity.get("relationship") or "").lower()
+            source_name = str((entity.get("source") or {}).get("name") or "").lower()
+            target_name = str((entity.get("target") or {}).get("name") or "").lower()
+            if any(term in relation for term in query_terms):
+                score += 3.0
+            if any(term in source_name or term in target_name for term in query_terms):
+                score += 2.0
         if doc.get("type") in {"profile", "project", "preference"}:
             score += 0.25
         scored.append((score, str(doc.get("temporal", {}).get("valid_from") or ""), content))
 
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    results = []
-    seen = set()
+    results, seen = [], set()
     for _, _, content in scored:
         if content not in seen:
             results.append(content)
@@ -246,7 +269,7 @@ def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[st
             break
 
     logger.info(
-        "RETRIEVAL_TIMING user_id=%s path=mongo_lexical total_ms=%.2f "
+        "RETRIEVAL_TIMING user_id=%s path=mongo_cached_lexical total_ms=%.2f "
         "scanned=%d matched=%d result_count=%d",
         user_id, (time.perf_counter() - started) * 1000,
         len(docs), len(scored), len(results),
