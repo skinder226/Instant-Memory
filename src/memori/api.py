@@ -40,49 +40,39 @@ def _requires_historical_project_lookup(message: str) -> bool:
 
 
 def _retrieve_project_memories_fast(user_id: str, include_history: bool = False) -> list[str]:
-    """Retrieve project memories, optionally including superseded records."""
+    """Retrieve project facts across canonical and legacy memory types."""
     from .mongodb_connection import db
 
     collection = db["memories"]
     base_filter = {"user_id": user_id}
     if not include_history:
         base_filter["temporal.is_current"] = {"$ne": False}
-    projection = {"content": 1, "type": 1, "temporal": 1}
+    projection = {"content": 1, "type": 1, "temporal": 1, "entities": 1}
     started = time.perf_counter()
 
-    # Keep the common query index-friendly; don't combine it with a regex OR.
-    query_started = time.perf_counter()
-    docs = list(collection.find(
-        {**base_filter, "type": "project"},
-        projection,
-    ).sort("temporal.valid_from", -1).limit(12))
-    structured_ms = (time.perf_counter() - query_started) * 1000
+    # Query canonical project memories and legacy memories whose extractor
+    # classified the same fact as profile/fact/semantic.
+    project_docs = list(collection.find(
+        {**base_filter, "type": "project"}, projection
+    ).sort("temporal.valid_from", -1).limit(30))
+    text_docs = list(collection.find({
+        **base_filter,
+        "content": {"$regex": r"\b(?:project|working on|works on|building|built at|test project)\b", "$options": "i"},
+    }, projection).sort("temporal.valid_from", -1).limit(30))
 
-    # Legacy data may have project facts stored under another type.
-    text_ms = 0.0
-    if not docs:
-        query_started = time.perf_counter()
-        docs = list(collection.find(
-            {
-                **base_filter,
-                "content": {
-                    "$regex": r"\b(?:project|working on|works on|building|built at)\b",
-                    "$options": "i",
-                },
-            },
-            projection,
-        ).sort("temporal.valid_from", -1).limit(12))
-        text_ms = (time.perf_counter() - query_started) * 1000
-
+    by_id = {}
+    for doc in project_docs + text_docs:
+        key = str(doc.get("_id", doc.get("id", id(doc))))
+        by_id[key] = doc
+    docs = list(by_id.values())
+    docs.sort(key=lambda doc: str((doc.get("temporal") or {}).get("valid_from") or ""), reverse=True)
     results = [doc["content"] for doc in docs if doc.get("content")]
     logger.info(
-        "✅ RETRIEVAL COMPLETE | user=%s | route=project_lookup | structured=%.1f ms | "
-        "fallback=%.1f ms | memories=%d | total=%.1f ms | selected=%s",
-        user_id, structured_ms, text_ms, len(results),
-        (time.perf_counter() - started) * 1000,
-        "structured" if structured_ms and not text_ms else "text_fallback",
+        "RETRIEVAL_TIMING user_id=%s path=project_lookup total_ms=%.2f history=%s result_count=%d",
+        user_id, (time.perf_counter() - started) * 1000, include_history, len(results),
     )
     return results
+
 
 _PERSONAL_WORKPLACE_QUESTION_RE = re.compile(
     r"\bwhere\b.{0,45}\b(?:i|im|i'm|am i|we|we're|are we)\b.{0,30}\b(?:work\w{0,5}|wokring|wroking|employ\w{0,5})\b|"
@@ -818,6 +808,28 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
             _save_message_background, user_id, user_input, role, True,
         )
         result["memory_save_scheduled"] = True
+        return result
+
+    # Collaborator questions can refer to a historical project. Search the
+    # named person's records across temporal states rather than only current
+    # project memories.
+    collaborator_match = re.search(
+        r"\b(?:project|working on|worked on)\b.{0,50}\bwith\s+([A-Z][\w.-]*)\b|"
+        r"\bwith\s+([A-Z][\w.-]*)\b.{0,50}\b(?:project|working on|worked on)\b",
+        user_input, re.I,
+    )
+    if collaborator_match:
+        name = next(group for group in collaborator_match.groups() if group)
+        from .mongodb_connection import db
+        docs = list(db["memories"].find({
+            "user_id": user_id,
+            "$or": [
+                {"content": {"$regex": r"\b" + re.escape(name) + r"\b", "$options": "i"}},
+                {"entities.source.name": {"$regex": "^" + re.escape(name) + "$", "$options": "i"}},
+                {"entities.target.name": {"$regex": "^" + re.escape(name) + "$", "$options": "i"}},
+            ],
+        }, {"content": 1, "temporal": 1, "type": 1, "entities": 1}).sort("temporal.valid_from", -1).limit(20))
+        result["retrieval"] = [doc["content"] for doc in docs if doc.get("content")]
         return result
 
     # Historical project questions must include superseded records.
