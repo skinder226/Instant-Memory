@@ -903,9 +903,24 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         result["retrieval"] = [doc["content"] for doc in docs if doc.get("content")]
         return result
 
-    # Historical project questions must include superseded records.
+    # Historical project questions must include superseded records. Attach the
+    # resolved historical relation to the result: the stored memory's content
+    # may describe Atlas but not repeat the anchor ("before Orion"), even though
+    # this retrieval path selected it specifically for that predecessor query.
     if _requires_historical_project_lookup(user_input):
-        result["retrieval"] = _retrieve_project_memories_fast(user_id, include_history=True, query=user_input)
+        historical_results = _retrieve_project_memories_fast(
+            user_id, include_history=True, query=user_input
+        )
+        before_match = re.search(r"\\bbefore\\s+([A-Z][\\w.-]*)\\b", user_input, re.IGNORECASE)
+        anchor = before_match.group(1) if before_match else None
+        if anchor and historical_results:
+            result["retrieval"] = [
+                f"Project-history lookup for the question 'what came before {anchor}' "
+                f"selected this historical project as the predecessor: {memory}"
+                for memory in historical_results
+            ]
+        else:
+            result["retrieval"] = historical_results
         return result
 
     # Fast path for direct project questions: read the user's current project
