@@ -80,7 +80,13 @@ if mem_llm_provider in openai_compatible_providers:
 
 # Function-calling structured output makes the Pydantic schema part of the
 # model interface instead of asking the model to emit unconstrained JSON.
-query_converter = router_chat.with_structured_output(RetivalTypes)
-memory_extractor = chat.with_structured_output(MemorySchema)
-RetrievalRouter = router_chat.with_structured_output(RetrievalPlan)
-MemoryDecisionGate = router_chat.with_structured_output(MemoryDecision)
+#
+# method="function_calling" is set explicitly because recent langchain-openai
+# versions default to the strict "json_schema" response_format. Strict mode
+# requires `additionalProperties: false` on every object, which conflicts with
+# RelationshipProperties (extra="allow" for free-form relationship properties)
+# and caused: "invalid JSON schema for response_format: 'MemorySchema'".
+query_converter = router_chat.with_structured_output(RetivalTypes, method="function_calling")
+memory_extractor = chat.with_structured_output(MemorySchema, method="function_calling")
+RetrievalRouter = router_chat.with_structured_output(RetrievalPlan, method="function_calling")
+MemoryDecisionGate = router_chat.with_structured_output(MemoryDecision, method="function_calling")
