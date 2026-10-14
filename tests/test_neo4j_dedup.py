@@ -1,4 +1,4 @@
-from src.memori import neo4j_learn
+from memori import neo4j_learn
 
 
 def test_graph_writer_merges_logical_fact_without_memory_id_identity(monkeypatch):
