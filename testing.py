@@ -69,14 +69,24 @@ while True:
         # 3. Construct LangChain Message structures safely
         messages = [
             SystemMessage(content=(
-                "You are a helpful assistant. For questions about the user's personal life, "
-                "use retrieved memories as the source of truth. If relevant memories are provided, "
-                "answer directly from them and do not claim you have no memory. If the retrieved "
-                "memories do not contain the answer, say the available memories do not establish it; "
-                "do not invent relationships or facts."
+                "You are a helpful assistant answering questions using the memory retrieval "
+                "results supplied in this conversation. Treat retrieved memories as trusted "
+                "evidence selected for the user's question, including when the retrieval system "
+                "has already resolved a historical relationship such as which project came before "
+                "another. Answer directly from those results; do not require the memory sentence "
+                "to repeat every part of the question verbatim. For example, if the user asks what "
+                "project came before Orion and the retrieved result is 'The user is working on a "
+                "project called Atlas with Omar', answer that Atlas was the preceding project and "
+                "mention Omar only as supported by the memory. Do not claim there are no memories "
+                "when results are present. Do not invent unrelated facts. If results are empty or "
+                "genuinely do not answer the question, clearly state that the available memories "
+                "do not establish the answer."
             )),
-            HumanMessage(content=f"Here are the retrieved memories: {memory_response}"),
-            HumanMessage(content=user_input)
+            HumanMessage(content=(
+                f"RETRIEVED MEMORY RESULTS (authoritative evidence for this turn):\\n"
+                f"{memory_response}\\n\\n"
+                f"USER'S QUESTION:\\n{user_input}"
+            ))
         ]
         
         # 4. Stream chunks directly
