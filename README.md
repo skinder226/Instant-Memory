@@ -91,3 +91,46 @@ Example (replace the model name with one available to your provider):
 
 The router model must support structured/function-calling output, because these
 calls use Pydantic schemas.
+
+
+## Production hardening
+
+See [docs/PRODUCTION_HARDENING.md](docs/PRODUCTION_HARDENING.md) for the production
+release gates, failure-injection plan, tenant-isolation requirements, backup/restore
+drills, and latency/monitoring targets.
+
+### Regression tests and preflight
+
+Run the synthetic retrieval benchmark (200 paraphrased questions; no external
+services required), tenant-scoping tests, and the complete test suite:
+
+```powershell
+uv run pytest tests/test_retrieval_eval.py tests/test_tenant_scoping.py tests/test_security_adapter.py -q
+uv run pytest
+```
+
+Run the deployment preflight to verify required environment variables are present
+and MongoDB can be reached. It never prints secret values and does not write data:
+
+```powershell
+uv run python scripts/healthcheck.py
+```
+
+The preflight checks configuration and MongoDB only; it does not certify Pinecone,
+Neo4j, or LLM provider availability.
+
+### Integrating with an authenticated application
+
+If your application authenticates users (for example, by validating a JWT), pass
+the **verified principal** to the adapter:
+
+```python
+from memori.security import memori_for_principal
+
+# principal must be produced by trusted auth middleware after token validation.
+result = memori_for_principal(principal, user_input, source="user")
+```
+
+Do not construct `principal` from request JSON or an unverified user-supplied
+`user_id`. The adapter derives the tenant from the verified `sub` claim (or
+`user_id` fallback); it does not implement authentication itself.
