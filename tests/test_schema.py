@@ -1,4 +1,4 @@
-from src.memori.schema import ContextDecision, MemoryItem, RetrievalPlan
+from memori.schema import ContextDecision, MemoryItem, RetrievalPlan
 
 
 def test_memory_item_has_no_unused_scoring_fields():
