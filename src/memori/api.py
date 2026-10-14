@@ -207,32 +207,50 @@ def _requires_knows_user_lookup(message: str) -> bool:
 
 
 def _retrieve_people_who_know_user(user_id: str) -> list[str]:
-    """Retrieve current relationship memories about people connected to the user."""
-    from .mongodb_connection import db
+    """Retrieve relationship memories from the shared short-lived user snapshot.
 
-    collection = db["memories"]
-    base = {"user_id": user_id, "temporal.is_current": {"$ne": False}}
-    projection = {"content": 1, "entities": 1, "temporal": 1}
-    relations = ["knows", "works_with", "has_friend", "friend_of", "has_colleague"]
-    docs = list(collection.find(
-        {**base, "entities.relationship": {"$in": relations}},
-        projection,
-    ).sort("temporal.valid_from", -1).limit(30))
-    if not docs:
-        docs = list(collection.find(
-            {**base, "content": {"$regex": r"\b(?:knows|friend|works with|colleague)\b", "$options": "i"}},
-            projection,
-        ).sort("temporal.valid_from", -1).limit(30))
+    Avoid a relationship-specific Mongo query with a potentially expensive
+    server-side sort. The lexical path already loads the same current-user
+    snapshot; reusing it makes this lookup local after the first cache miss.
+    """
+    started = time.perf_counter()
+    docs = _get_current_user_memories(user_id)
+    snapshot_ms = (time.perf_counter() - started) * 1000
 
-    results, seen = [], set()
+    relations = {"knows", "works_with", "has_friend", "friend_of", "has_colleague"}
+    matched = []
     for doc in docs:
+        entities = doc.get("entities") or []
+        has_relationship = any(
+            isinstance(entity, dict)
+            and str(entity.get("relationship") or "").strip().lower() in relations
+            for entity in entities
+        )
         content = str(doc.get("content") or "").strip()
+        has_text_match = bool(content) and bool(
+            re.search(r"\\b(?:knows|friend|works with|colleague)\\b", content, re.IGNORECASE)
+        )
+        if has_relationship or has_text_match:
+            matched.append((
+                str((doc.get("temporal") or {}).get("valid_from") or ""),
+                content,
+            ))
+
+    # Newest facts first, but sort locally instead of forcing MongoDB to sort
+    # the relationship query before returning any rows.
+    matched.sort(key=lambda item: item[0], reverse=True)
+    results, seen = [], set()
+    for _, content in matched:
         if content and content not in seen:
             results.append(content)
             seen.add(content)
-    logger.info("🧠 RETRIEVAL | user=%s | route=relationship_lookup | matched_memories=%d", user_id, len(results))
-    return results[:10]
 
+    logger.info(
+        "🧠 RETRIEVAL | user=%s | route=relationship_lookup | snapshot=%.2f ms | "
+        "scanned=%d | matched=%d",
+        user_id, snapshot_ms, len(docs), len(results),
+    )
+    return results[:10]
 
 _RETRIEVAL_STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "been", "being", "but",
