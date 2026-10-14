@@ -45,7 +45,10 @@ while True:
             continue
             
         retrieval_started = time.perf_counter()
-        memory_response = memori("user_125", user_input)
+        memory_response = memori("user_125", user_input, source="user")
+        # The package API returns a structured result; pass only retrieved memories to the LLM.
+        if isinstance(memory_response, dict):
+            memory_response = memory_response.get("retrieval", [])
         retrieval_seconds = time.perf_counter() - retrieval_started
         print(f"⏱️ Memory retrieval took {retrieval_seconds:.3f} seconds")
         print("AI: ", end="", flush=True)
