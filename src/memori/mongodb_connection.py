@@ -47,7 +47,13 @@ class _MongoTimingListener(monitoring.CommandListener):
 connection_string = os.getenv("mongodb_URI")
 # PyMongo connects lazily; the first command includes initial connection/setup delay.
 _mongo_timing_listener = _MongoTimingListener()
-client = MongoClient(connection_string, event_listeners=[_mongo_timing_listener])
+client = MongoClient(
+    connection_string,
+    event_listeners=[_mongo_timing_listener],
+    serverSelectionTimeoutMS=int(os.getenv("MONGODB_SERVER_SELECTION_TIMEOUT_MS", "5000")),
+    connectTimeoutMS=int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", "5000")),
+    socketTimeoutMS=int(os.getenv("MONGODB_SOCKET_TIMEOUT_MS", "15000")),
+)
 
 # Select/Create database
 db = client["memories"]
