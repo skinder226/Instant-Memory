@@ -564,27 +564,63 @@ def _compact_extractor_system_message() -> str:
     )
 
 
-def _attach_explicit_project_supersession(user_id: str, user_input: str, memory_data: list[dict]) -> None:
-    """Link a corrected project to the explicitly named prior project."""
+def _attach_explicit_project_supersession(user_id: str, user_input: str, memory_data: list[dict]) -> bool:
+    """Link a corrected project to its explicitly named prior project.
+
+    When extraction emits a new memory, attach the old Mongo IDs to that memory's
+    outbox event. If extraction treats the correction as a duplicate, repair the
+    existing current project and requeue its projections instead.
+    """
     match = re.search(r"\b(?:now|changed to|updated to|replaced by|is now)\s+([A-Z][\w.-]*)\s*,?\s+not\s+([A-Z][\w.-]*)\b", user_input, re.I)
     if not match:
-        return
+        return False
     new_name, old_name = match.group(1).casefold(), match.group(2).casefold()
     project_items = [item for item in memory_data if item.get("type") == "project" and any(
         isinstance(entity, dict) and str((entity.get("target") or {}).get("name") or "").casefold() == new_name
         for entity in (item.get("entities") or []))]
-    if not project_items:
-        return
     from .mongodb_connection import db
     old_docs = list(db["memories"].find({"user_id": user_id, "type": "project", "temporal.is_current": {"$ne": False},
         "$or": [{"entities.target.name": {"$regex": "^" + re.escape(match.group(2)) + "$", "$options": "i"}},
                 {"content": {"$regex": r"\b" + re.escape(match.group(2)) + r"\b", "$options": "i"}}]}, {"_id": 1, "content": 1, "entities": 1}))
-    old_ids = [str(doc["_id"]) for doc in old_docs if any(
+    old_docs = [doc for doc in old_docs if any(
         isinstance(entity, dict) and str((entity.get("target") or {}).get("name") or "").casefold() == old_name
         for entity in (doc.get("entities") or [])) or re.search(r"\b" + re.escape(match.group(2)) + r"\b", str(doc.get("content") or ""), re.I)]
-    if old_ids:
+    if not old_docs:
+        return False
+    old_ids = [str(doc["_id"]) for doc in old_docs]
+
+    if project_items:
         for item in project_items:
             item["_supersedes_mongo_ids"] = list(dict.fromkeys((item.get("_supersedes_mongo_ids") or []) + old_ids))
+        return False
+
+    # Extraction may return no memory because Orion already exists. In that case
+    # close the old fact and requeue the existing Orion projection sync.
+    current_new = list(db["memories"].find({
+        "user_id": user_id, "type": "project", "temporal.is_current": {"$ne": False},
+        "entities.target.name": {"$regex": "^" + re.escape(match.group(1)) + "$", "$options": "i"},
+    }, {"_id": 1, "content": 1, "entities": 1}))
+    if not current_new:
+        return False
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    from pymongo import UpdateOne
+    db["memories"].bulk_write([
+        UpdateOne({"_id": doc["_id"], "user_id": user_id},
+                  {"$set": {"temporal.is_current": False, "temporal.valid_until": now}})
+        for doc in old_docs
+    ], ordered=False)
+    for new_doc in current_new:
+        db["outbox"].update_one(
+            {"user_id": user_id, "mongo_id": str(new_doc["_id"])},
+            {"$addToSet": {"supersedes_memory_ids": {"$each": old_ids}},
+             "$set": {"pinecone.status": "pending", "pinecone.attempts": 0,
+                      "pinecone.last_error": None, "neo4j.status": "pending",
+                      "neo4j.attempts": 0, "neo4j.last_error": None, "updated_at": now}},
+        )
+    with _USER_MEMORY_CACHE_LOCK:
+        _USER_MEMORY_CACHE.pop(user_id, None)
+    return True
 
 
 def _save_message_background(user_id: str, user_input: str, role: str,
@@ -673,6 +709,7 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                     {"role": "user", "content": user_input},
                 ])
 
+        repaired_existing_project = False
         if response.memories:
             memory_data = []
             for memory in response.memories:
@@ -681,8 +718,10 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                 memory_data.append(item)
             _attach_explicit_project_supersession(user_id, user_input, memory_data)
             _save_memories_and_outbox(db, memory_data, user_id)
+        else:
+            repaired_existing_project = _attach_explicit_project_supersession(user_id, user_input, [])
 
-        if response.memories:
+        if response.memories or repaired_existing_project:
             save_pending_memory(user_id)
 
         if response.placeholder_updates:
