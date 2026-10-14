@@ -39,19 +39,91 @@ def _requires_historical_project_lookup(message: str) -> bool:
                 and re.search(r"\b(?:project|test project|app|system)\b", message, re.I))
 
 
-def _retrieve_project_memories_fast(user_id: str, include_history: bool = False) -> list[str]:
-    """Retrieve project facts across canonical and legacy memory types."""
+def _retrieve_project_memories_fast(user_id: str, include_history: bool = False, query: str = "") -> list[str]:
+    """Retrieve relevant project facts, including the predecessor of a named current project."""
     from .mongodb_connection import db
 
     collection = db["memories"]
+    projection = {"content": 1, "type": 1, "temporal": 1, "entities": 1, "id": 1}
+    started = time.perf_counter()
+
+    if include_history:
+        # For questions such as "What was my project before Orion?", first
+        # resolve Orion and follow its explicit outbox supersession link.
+        before_match = re.search(r"\bbefore\s+([A-Z][\w.-]*)\b", query, re.IGNORECASE)
+        anchor = before_match.group(1) if before_match else None
+        if anchor:
+            current_docs = list(collection.find({
+                "user_id": user_id,
+                "temporal.is_current": {"$ne": False},
+                "$or": [
+                    {"entities.target.name": {"$regex": "^" + re.escape(anchor) + "$", "$options": "i"}},
+                    {"content": {"$regex": r"\b" + re.escape(anchor) + r"\b", "$options": "i"}},
+                ],
+            }, projection).limit(10))
+            current_docs = [
+                doc for doc in current_docs
+                if any(
+                    isinstance(entity, dict)
+                    and str((entity.get("target") or {}).get("name") or "").casefold() == anchor.casefold()
+                    for entity in (doc.get("entities") or [])
+                )
+            ]
+            superseded_ids = []
+            for current in current_docs:
+                event = db["outbox"].find_one(
+                    {"user_id": user_id, "mongo_id": str(current.get("_id"))},
+                    {"supersedes_memory_ids": 1},
+                )
+                if event:
+                    superseded_ids.extend(str(value) for value in (event.get("supersedes_memory_ids") or []))
+            object_ids = [ObjectId(value) for value in dict.fromkeys(superseded_ids) if ObjectId.is_valid(value)]
+            if object_ids:
+                linked_docs = list(collection.find({
+                    "user_id": user_id, "_id": {"$in": object_ids},
+                }, projection).sort("temporal.valid_from", -1))
+                linked_results = [doc["content"] for doc in linked_docs if doc.get("content")]
+                if linked_results:
+                    logger.info(
+                        "RETRIEVAL_TIMING user_id=%s path=project_predecessor total_ms=%.2f result_count=%d anchor=%s",
+                        user_id, (time.perf_counter() - started) * 1000, len(linked_results), anchor,
+                    )
+                    return linked_results[:5]
+
+        # Fallback for legacy records without an outbox supersession link:
+        # only consider historical project memories, not every project ever stored.
+        historical_docs = list(collection.find({
+            "user_id": user_id,
+            "type": "project",
+            "temporal.is_current": False,
+        }, projection).sort("temporal.valid_until", -1).limit(30))
+        if anchor:
+            historical_docs = [
+                doc for doc in historical_docs
+                if not any(
+                    isinstance(entity, dict)
+                    and str((entity.get("target") or {}).get("name") or "").casefold() == anchor.casefold()
+                    for entity in (doc.get("entities") or [])
+                )
+            ]
+        # The most recently superseded project is the best fallback candidate
+        # when old records predate explicit supersedes links.
+        historical_docs.sort(
+            key=lambda doc: str((doc.get("temporal") or {}).get("valid_until") or
+                                (doc.get("temporal") or {}).get("valid_from") or ""),
+            reverse=True,
+        )
+        if historical_docs:
+            results = [doc["content"] for doc in historical_docs if doc.get("content")]
+            logger.info(
+                "RETRIEVAL_TIMING user_id=%s path=project_history_fallback total_ms=%.2f result_count=%d",
+                user_id, (time.perf_counter() - started) * 1000, len(results),
+            )
+            return results[:5]
+
     base_filter = {"user_id": user_id}
     if not include_history:
         base_filter["temporal.is_current"] = {"$ne": False}
-    projection = {"content": 1, "type": 1, "temporal": 1, "entities": 1}
-    started = time.perf_counter()
-
-    # Query canonical project memories and legacy memories whose extractor
-    # classified the same fact as profile/fact/semantic.
     project_docs = list(collection.find(
         {**base_filter, "type": "project"}, projection
     ).sort("temporal.valid_from", -1).limit(30))
@@ -72,7 +144,6 @@ def _retrieve_project_memories_fast(user_id: str, include_history: bool = False)
         user_id, (time.perf_counter() - started) * 1000, include_history, len(results),
     )
     return results
-
 
 _PERSONAL_WORKPLACE_QUESTION_RE = re.compile(
     r"\bwhere\b.{0,45}\b(?:i|im|i'm|am i|we|we're|are we)\b.{0,30}\b(?:work\w{0,5}|wokring|wroking|employ\w{0,5})\b|"
@@ -834,7 +905,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
 
     # Historical project questions must include superseded records.
     if _requires_historical_project_lookup(user_input):
-        result["retrieval"] = _retrieve_project_memories_fast(user_id, include_history=True)
+        result["retrieval"] = _retrieve_project_memories_fast(user_id, include_history=True, query=user_input)
         return result
 
     # Fast path for direct project questions: read the user's current project
