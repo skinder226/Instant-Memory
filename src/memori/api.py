@@ -343,6 +343,14 @@ def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[st
         searchable = content.lower() + " " + " ".join(entity_parts)
         words = set(re.findall(r"[a-z0-9_+#.-]{2,}", searchable))
         words.update(part for part in re.findall(r"[a-z0-9_+#.-]{2,}", searchable.replace("_", " ")))
+        # Lightweight morphology helps common question/fact inflections match
+        # (work/works, sibling/siblings) without requiring an external model.
+        for word in tuple(words):
+            if len(word) > 4 and word.endswith("s"):
+                words.add(word[:-1])
+            if len(word) > 5 and word.endswith("ing"):
+                words.add(word[:-3])
+                words.add(word[:-3] + "e")
         overlap = expanded_terms & words
         if not overlap:
             continue
