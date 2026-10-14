@@ -1,6 +1,8 @@
 import logging
 import os
 import time
+from rich.logging import RichHandler
+from rich.console import Console
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
@@ -9,8 +11,19 @@ from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 from memori import memori
 
-# Show per-database latency diagnostics emitted by the memory pipeline.
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Readable, colored logs for the interactive test client. Keep low-level Mongo
+# command timings and raw HTTP request lines out of the normal console output.
+console = Console()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(console=console, rich_tracebacks=True, show_path=False, markup=True)],
+    force=True,
+)
+logging.getLogger("memori.mongodb_connection").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # Load variables from your local .env file securely
 load_dotenv()
@@ -30,7 +43,7 @@ llm =   ChatGroq(
     temperature=0.5,
     streaming=True
 )
-print("🤖 LangChain Chatbot initialized! Type 'exit' or 'quit' to stop.\n")
+console.print("[bold cyan]Instant-Memory Chatbot[/bold cyan]  [dim]Type 'exit' or 'quit' to stop.[/dim]\n")
 
 # 2. Continuous interaction loop
 while True:
@@ -38,7 +51,7 @@ while True:
         user_input = input("You: ")
         
         if user_input.strip().lower() in ['exit', 'quit']:
-            print("Goodbye!")
+            console.print("[yellow]Goodbye![/yellow]")
             break
             
         if not user_input.strip():
@@ -50,12 +63,18 @@ while True:
         if isinstance(memory_response, dict):
             memory_response = memory_response.get("retrieval", [])
         retrieval_seconds = time.perf_counter() - retrieval_started
-        print(f"⏱️ Memory retrieval took {retrieval_seconds:.3f} seconds")
-        print("AI: ", end="", flush=True)
+        console.print(f"[bold cyan]🧠 MEMORY RETRIEVAL[/bold cyan] [green]{retrieval_seconds:.3f}s[/green]  [dim]memories={len(memory_response) if isinstance(memory_response, list) else 0}[/dim]")
+        console.print("[bold magenta]AI[/bold magenta] ", end="")
         
         # 3. Construct LangChain Message structures safely
         messages = [
-            SystemMessage(content="You are a helpful assistant."),
+            SystemMessage(content=(
+                "You are a helpful assistant. For questions about the user's personal life, "
+                "use retrieved memories as the source of truth. If relevant memories are provided, "
+                "answer directly from them and do not claim you have no memory. If the retrieved "
+                "memories do not contain the answer, say the available memories do not establish it; "
+                "do not invent relationships or facts."
+            )),
             HumanMessage(content=f"Here are the retrieved memories: {memory_response}"),
             HumanMessage(content=user_input)
         ]
@@ -65,14 +84,14 @@ while True:
         full_response = ""
         for chunk in llm.stream(messages):
             if chunk.content:
-                print(chunk.content, end="", flush=True)
+                console.print(chunk.content, end="")
                 full_response += chunk.content
         response_seconds = time.perf_counter() - response_started
-        print(f"\n⏱️ AI response generation took {response_seconds:.3f} seconds")
-        print(f"⏱️ Total turn time (retrieval + AI response): {retrieval_seconds + response_seconds:.3f} seconds\n")
+        console.print(f"\n[bold magenta]⚡ AI RESPONSE[/bold magenta] [green]{response_seconds:.3f}s[/green]")
+        console.print(f"[bold]⏱ TOTAL TURN[/bold] [green]{retrieval_seconds + response_seconds:.3f}s[/green]\n")
 
     except KeyboardInterrupt:
-        print("\nSession interrupted. Goodbye!")
+        console.print("\n[yellow]Session interrupted. Goodbye![/yellow]")
         break
     except Exception as e:
-        print(f"\nAn error occurred: {e}\n")
+        console.print(f"\n[bold red]ERROR[/bold red] {e}\n")
