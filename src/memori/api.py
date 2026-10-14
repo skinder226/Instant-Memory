@@ -180,6 +180,46 @@ def _requires_personal_memory_lookup(message: str) -> bool:
 
 
 
+
+_KNOWS_USER_QUESTION_RE = re.compile(
+    r"\bwho\b.{0,35}\b(?:knows?|know)\s+me\b|"
+    r"\bwho\b.{0,35}\b(?:is aware of me|knows about me)\b",
+    re.IGNORECASE,
+)
+
+
+def _requires_knows_user_lookup(message: str) -> bool:
+    return bool(_KNOWS_USER_QUESTION_RE.search(message.strip()))
+
+
+def _retrieve_people_who_know_user(user_id: str) -> list[str]:
+    """Retrieve current relationship memories about people connected to the user."""
+    from .mongodb_connection import db
+
+    collection = db["memories"]
+    base = {"user_id": user_id, "temporal.is_current": {"$ne": False}}
+    projection = {"content": 1, "entities": 1, "temporal": 1}
+    relations = ["knows", "works_with", "has_friend", "friend_of", "has_colleague"]
+    docs = list(collection.find(
+        {**base, "entities.relationship": {"$in": relations}},
+        projection,
+    ).sort("temporal.valid_from", -1).limit(30))
+    if not docs:
+        docs = list(collection.find(
+            {**base, "content": {"$regex": r"\b(?:knows|friend|works with|colleague)\b", "$options": "i"}},
+            projection,
+        ).sort("temporal.valid_from", -1).limit(30))
+
+    results, seen = [], set()
+    for doc in docs:
+        content = str(doc.get("content") or "").strip()
+        if content and content not in seen:
+            results.append(content)
+            seen.add(content)
+    logger.info("RETRIEVAL_PATH user_id=%s path=knows_user_fast result_count=%d", user_id, len(results))
+    return results[:10]
+
+
 _RETRIEVAL_STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "been", "being", "but",
     "by", "did", "do", "does", "for", "from", "had", "has", "have", "he",
@@ -269,7 +309,7 @@ def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[st
         if len(results) >= limit:
             break
 
-    logger.info(
+    logger.debug(
         "RETRIEVAL_TIMING user_id=%s path=mongo_cached_lexical total_ms=%.2f "
         "scanned=%d matched=%d result_count=%d",
         user_id, (time.perf_counter() - started) * 1000,
@@ -554,10 +594,19 @@ def _decide_and_save_background(user_id: str, user_input: str, role: str) -> Non
         from .llms import MemoryDecisionGate
         from .worker import invoke_with_retry
 
+        router_started = time.perf_counter()
+        logger.info("AI_ROUTER_REQUEST user_id=%s model_role=memory_decision source=%s input=%r",
+                    user_id, role, user_input[:500])
         decision = invoke_with_retry(
             MemoryDecisionGate,
             [{"role": "system", "content": memory_decision_prompt},
              {"role": "user", "content": user_input}],
+        )
+        logger.info(
+            "AI_ROUTER_RESPONSE user_id=%s model_role=memory_decision duration_ms=%.2f "
+            "needs_saving=%s saving_needs_context=%s needs_retrieval=%s",
+            user_id, (time.perf_counter() - router_started) * 1000,
+            decision.needs_saving, decision.saving_needs_context, decision.needs_retrieval,
         )
         if decision.needs_saving:
             _save_message_background(
@@ -634,6 +683,16 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
             "RETRIEVAL_TIMING user_id=%s path=workplace_fast total_ms=%.2f result_count=%d",
             user_id, (time.perf_counter() - fast_started) * 1000,
             len(result["retrieval"]),
+        )
+        return result
+
+    # Relationship questions need relation-aware lookup, not keyword overlap.
+    if _requires_knows_user_lookup(user_input):
+        fast_started = time.perf_counter()
+        result["retrieval"] = _retrieve_people_who_know_user(user_id)
+        logger.info(
+            "RETRIEVAL_TIMING user_id=%s path=knows_user_fast total_ms=%.2f result_count=%d",
+            user_id, (time.perf_counter() - fast_started) * 1000, len(result["retrieval"]),
         )
         return result
 
