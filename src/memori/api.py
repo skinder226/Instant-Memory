@@ -33,15 +33,20 @@ def _requires_personal_project_lookup(message: str) -> bool:
     return bool(_PERSONAL_PROJECT_QUESTION_RE.search(message.strip()))
 
 
-def _retrieve_project_memories_fast(user_id: str) -> list[str]:
-    """Retrieve current project memories from MongoDB without routing LLM calls."""
+def _requires_historical_project_lookup(message: str) -> bool:
+    """Recognize questions about prior or former projects."""
+    return bool(re.search(r"\b(?:before|previously|previous|former|formerly|used to|historical|history)\b", message, re.I)
+                and re.search(r"\b(?:project|test project|app|system)\b", message, re.I))
+
+
+def _retrieve_project_memories_fast(user_id: str, include_history: bool = False) -> list[str]:
+    """Retrieve project memories, optionally including superseded records."""
     from .mongodb_connection import db
 
     collection = db["memories"]
-    base_filter = {
-        "user_id": user_id,
-        "temporal.is_current": {"$ne": False},
-    }
+    base_filter = {"user_id": user_id}
+    if not include_history:
+        base_filter["temporal.is_current"] = {"$ne": False}
     projection = {"content": 1, "type": 1, "temporal": 1}
     started = time.perf_counter()
 
@@ -417,6 +422,7 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
     for raw in memories_data:
         memory = dict(raw)
         placeholders = memory.pop("placeholders", []) or []
+        explicit_supersedes = memory.pop("_supersedes_mongo_ids", []) or []
         memory["user_id"] = user_id
         incoming_id = memory.get("id")
         if incoming_id:
@@ -430,6 +436,7 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
             "memory": memory,
             "incoming_id": str(incoming_id) if incoming_id else None,
             "placeholders": placeholders,
+            "explicit_supersedes": [str(value) for value in explicit_supersedes],
         })
 
     previous_by_id = {}
@@ -441,6 +448,19 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
         }):
             previous_by_id.setdefault(str(old.get("id")), []).append(old)
 
+    explicit_superseded_by_item = []
+    explicit_old_ids = set()
+    for item in prepared:
+        old_docs = []
+        for old_id in item["explicit_supersedes"]:
+            if not ObjectId.is_valid(old_id):
+                continue
+            old = db["memories"].find_one({"_id": ObjectId(old_id), "user_id": user_id, "type": "project"})
+            if old:
+                old_docs.append(old)
+                explicit_old_ids.add(str(old["_id"]))
+        explicit_superseded_by_item.append(old_docs)
+
     previous_updates = []
     for old_docs in previous_by_id.values():
         for old in old_docs:
@@ -449,13 +469,16 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
                 {"$set": {"temporal.is_current": False,
                           "temporal.valid_until": now}},
             ))
+    for old_id in explicit_old_ids:
+        previous_updates.append(UpdateOne({"_id": ObjectId(old_id), "user_id": user_id},
+            {"$set": {"temporal.is_current": False, "temporal.valid_until": now}}))
     if previous_updates:
         db["memories"].bulk_write(previous_updates, ordered=False)
 
     memory_docs = []
     outbox_docs = []
     output_ids = []
-    for item in prepared:
+    for item_index, item in enumerate(prepared):
         memory = item["memory"]
         stable_id = item["incoming_id"]
         mongo_oid = ObjectId()
@@ -485,7 +508,7 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
             "memory_id": stable_id,
             "mongo_id": mongo_id,
             "user_id": user_id,
-            "supersedes_memory_ids": [str(old["_id"]) for old in previous],
+            "supersedes_memory_ids": list(dict.fromkeys([str(old["_id"]) for old in previous] + [str(old["_id"]) for old in explicit_superseded_by_item[item_index]])),
             "placeholders": placeholder_docs,
             "pinecone": {"status": "pending", "attempts": 0, "last_error": None},
             "neo4j": {"status": "pending", "attempts": 0, "last_error": None},
@@ -539,6 +562,29 @@ def _compact_extractor_system_message() -> str:
         "Return empty memories and placeholder_updates when nothing qualifies. "
         "Keep entities valid and avoid null/empty entity values."
     )
+
+
+def _attach_explicit_project_supersession(user_id: str, user_input: str, memory_data: list[dict]) -> None:
+    """Link a corrected project to the explicitly named prior project."""
+    match = re.search(r"\b(?:now|changed to|updated to|replaced by|is now)\s+([A-Z][\w.-]*)\s*,?\s+not\s+([A-Z][\w.-]*)\b", user_input, re.I)
+    if not match:
+        return
+    new_name, old_name = match.group(1).casefold(), match.group(2).casefold()
+    project_items = [item for item in memory_data if item.get("type") == "project" and any(
+        isinstance(entity, dict) and str((entity.get("target") or {}).get("name") or "").casefold() == new_name
+        for entity in (item.get("entities") or []))]
+    if not project_items:
+        return
+    from .mongodb_connection import db
+    old_docs = list(db["memories"].find({"user_id": user_id, "type": "project", "temporal.is_current": {"$ne": False},
+        "$or": [{"entities.target.name": {"$regex": "^" + re.escape(match.group(2)) + "$", "$options": "i"}},
+                {"content": {"$regex": r"\b" + re.escape(match.group(2)) + r"\b", "$options": "i"}}]}, {"_id": 1, "content": 1, "entities": 1}))
+    old_ids = [str(doc["_id"]) for doc in old_docs if any(
+        isinstance(entity, dict) and str((entity.get("target") or {}).get("name") or "").casefold() == old_name
+        for entity in (doc.get("entities") or [])) or re.search(r"\b" + re.escape(match.group(2)) + r"\b", str(doc.get("content") or ""), re.I)]
+    if old_ids:
+        for item in project_items:
+            item["_supersedes_mongo_ids"] = list(dict.fromkeys((item.get("_supersedes_mongo_ids") or []) + old_ids))
 
 
 def _save_message_background(user_id: str, user_input: str, role: str,
@@ -633,6 +679,7 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                 item = memory.model_dump()
                 item["source_role"] = role
                 memory_data.append(item)
+            _attach_explicit_project_supersession(user_id, user_input, memory_data)
             _save_memories_and_outbox(db, memory_data, user_id)
 
         if response.memories:
@@ -732,6 +779,11 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
             _save_message_background, user_id, user_input, role, True,
         )
         result["memory_save_scheduled"] = True
+        return result
+
+    # Historical project questions must include superseded records.
+    if _requires_historical_project_lookup(user_input):
+        result["retrieval"] = _retrieve_project_memories_fast(user_id, include_history=True)
         return result
 
     # Fast path for direct project questions: read the user's current project
