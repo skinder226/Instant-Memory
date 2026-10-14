@@ -288,7 +288,7 @@ def _get_current_user_memories(user_id: str) -> list[dict]:
 
 
 def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[str]:
-    """Fast local lexical ranking over a cached snapshot of all current user memories."""
+    """Rank current memories using both prose and their structured graph entities."""
     started = time.perf_counter()
     tokens = [
         token for token in re.findall(r"[a-z0-9_+#.-]{2,}", query.lower())
@@ -297,52 +297,91 @@ def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[st
     if not tokens:
         return []
 
+    # Expand common question concepts into graph relationship vocabulary.
+    # This is generic retrieval normalization, not a one-question special case.
+    relation_synonyms = {
+        "sibling": {"sibling", "siblings", "sibling_of", "brother", "sister"},
+        "siblings": {"sibling", "siblings", "sibling_of", "brother", "sister"},
+        "brother": {"sibling", "siblings", "sibling_of", "brother"},
+        "sister": {"sibling", "siblings", "sibling_of", "sister"},
+        "friend": {"friend", "friends", "has_friend", "friend_of", "knows"},
+        "friends": {"friend", "friends", "has_friend", "friend_of", "knows"},
+        "know": {"know", "knows", "known_by", "friend_of", "has_friend"},
+        "knows": {"know", "knows", "known_by", "friend_of", "has_friend"},
+        "work": {"work", "works_at", "works_with", "employed_at", "employed_by"},
+        "working": {"work", "works_at", "works_with", "employed_at", "employed_by"},
+        "parent": {"parent", "mother", "father", "has_parent", "child_of"},
+        "parents": {"parent", "mother", "father", "has_parent", "child_of"},
+        "child": {"child", "son", "daughter", "has_child"},
+        "children": {"child", "son", "daughter", "has_child"},
+        "wife": {"wife", "spouse", "married_to"},
+        "husband": {"husband", "spouse", "married_to"},
+        "spouse": {"wife", "husband", "spouse", "married_to"},
+    }
+    expanded_terms = set(tokens)
+    for token in tokens:
+        expanded_terms.update(relation_synonyms.get(token, ()))
+
     docs = _get_current_user_memories(user_id)
-    query_terms = set(tokens)
     scored = []
+    normalized_query = " ".join(tokens)
     for doc in docs:
         content = str(doc.get("content") or "")
-        if not content:
-            continue
-        content_lc = content.lower()
-        words = set(re.findall(r"[a-z0-9_+#.-]{2,}", content_lc))
-        overlap = query_terms & words
+        entities = doc.get("entities") or []
+        # Graph facts may contain the answer only in entity nodes/relationship,
+        # not in the natural-language memory content.
+        entity_parts = []
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            entity_parts.append(str(entity.get("relationship") or "").lower().replace("_", " "))
+            for node_key in ("source", "target"):
+                node = entity.get(node_key) or {}
+                if isinstance(node, dict):
+                    entity_parts.append(str(node.get("name") or "").lower())
+                    entity_parts.append(str(node.get("entity_type") or "").lower())
+        searchable = content.lower() + " " + " ".join(entity_parts)
+        words = set(re.findall(r"[a-z0-9_+#.-]{2,}", searchable))
+        words.update(part for part in re.findall(r"[a-z0-9_+#.-]{2,}", searchable.replace("_", " ")))
+        overlap = expanded_terms & words
         if not overlap:
             continue
 
         score = sum(2.0 if len(term) >= 6 else 1.0 for term in overlap)
         score += 3.0 * sum(1 for term in tokens if term in words and len(term) >= 5)
-        # Strongly prefer exact phrase matches, but don't require them.
-        normalized_query = " ".join(tokens)
-        if normalized_query in content_lc:
+        if normalized_query in content.lower():
             score += 10.0
-        # Prefer structured relationship matches for entity/action questions.
-        entities = doc.get("entities") or []
+
+        # Prefer structured relation matches when the question names a relation
+        # or a synonym, and prefer records that actually contain a person/entity.
         for entity in entities:
             if not isinstance(entity, dict):
                 continue
-            relation = str(entity.get("relationship") or "").lower()
-            source_name = str((entity.get("source") or {}).get("name") or "").lower()
-            target_name = str((entity.get("target") or {}).get("name") or "").lower()
-            if any(term in relation for term in query_terms):
-                score += 3.0
-            if any(term in source_name or term in target_name for term in query_terms):
-                score += 2.0
+            relation = str(entity.get("relationship") or "").lower().replace("_", " ")
+            relation_words = set(re.findall(r"[a-z0-9_+#.-]{2,}", relation))
+            if relation_words & expanded_terms:
+                score += 6.0
+            for node_key in ("source", "target"):
+                node = entity.get(node_key) or {}
+                if isinstance(node, dict):
+                    node_name = str(node.get("name") or "").lower()
+                    if node_name and any(term in node_name for term in tokens):
+                        score += 2.0
         if doc.get("type") in {"profile", "project", "preference"}:
             score += 0.25
-        scored.append((score, str(doc.get("temporal", {}).get("valid_from") or ""), content))
+        scored.append((score, str((doc.get("temporal") or {}).get("valid_from") or ""), content))
 
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     results, seen = [], set()
     for _, _, content in scored:
-        if content not in seen:
+        if content and content not in seen:
             results.append(content)
             seen.add(content)
         if len(results) >= limit:
             break
 
-    logger.debug(
-        "RETRIEVAL_TIMING user_id=%s path=mongo_cached_lexical total_ms=%.2f "
+    logger.info(
+        "RETRIEVAL_TIMING user_id=%s path=mongo_entity_lexical total_ms=%.2f "
         "scanned=%d matched=%d result_count=%d",
         user_id, (time.perf_counter() - started) * 1000,
         len(docs), len(scored), len(results),
