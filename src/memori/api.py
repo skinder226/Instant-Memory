@@ -11,6 +11,7 @@ from typing import Any
 
 from bson import ObjectId
 from pymongo import UpdateOne
+from rapidfuzz.distance import Levenshtein
 
 logger = logging.getLogger(__name__)
 _background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memori-ingest")
@@ -189,7 +190,20 @@ _KNOWS_USER_QUESTION_RE = re.compile(
 
 
 def _requires_knows_user_lookup(message: str) -> bool:
-    return bool(_KNOWS_USER_QUESTION_RE.search(message.strip()))
+    """Recognize relationship questions, including common misspellings like 'knwos'."""
+    text = message.strip().lower()
+    if _KNOWS_USER_QUESTION_RE.search(text):
+        return True
+
+    # Keep this narrow: it must look like a "who ... [knows] me" question,
+    # and only fuzzy-match the action word so unrelated questions don't route here.
+    tokens = re.findall(r"[a-z]+", text)
+    if not tokens or tokens[0] != "who" or "me" not in tokens:
+        return False
+    for token in tokens[1:]:
+        if 3 <= len(token) <= 8 and Levenshtein.distance(token, "knows") <= 2:
+            return True
+    return False
 
 
 def _retrieve_people_who_know_user(user_id: str) -> list[str]:
@@ -216,7 +230,7 @@ def _retrieve_people_who_know_user(user_id: str) -> list[str]:
         if content and content not in seen:
             results.append(content)
             seen.add(content)
-    logger.info("RETRIEVAL_PATH user_id=%s path=knows_user_fast result_count=%d", user_id, len(results))
+    logger.info("🧠 RETRIEVAL | user=%s | route=relationship_lookup | matched_memories=%d", user_id, len(results))
     return results[:10]
 
 
@@ -595,16 +609,15 @@ def _decide_and_save_background(user_id: str, user_input: str, role: str) -> Non
         from .worker import invoke_with_retry
 
         router_started = time.perf_counter()
-        logger.info("AI_ROUTER_REQUEST user_id=%s model_role=memory_decision source=%s input=%r",
-                    user_id, role, user_input[:500])
+        logger.info("🤖 ROUTER START | user=%s | source=%s | message=%r",
+                    user_id, role, user_input[:300])
         decision = invoke_with_retry(
             MemoryDecisionGate,
             [{"role": "system", "content": memory_decision_prompt},
              {"role": "user", "content": user_input}],
         )
         logger.info(
-            "AI_ROUTER_RESPONSE user_id=%s model_role=memory_decision duration_ms=%.2f "
-            "needs_saving=%s saving_needs_context=%s needs_retrieval=%s",
+            "🤖 ROUTER DONE | user=%s | duration=%.0f ms | save=%s | needs_context=%s | retrieval_intent=%s",
             user_id, (time.perf_counter() - router_started) * 1000,
             decision.needs_saving, decision.saving_needs_context, decision.needs_retrieval,
         )
