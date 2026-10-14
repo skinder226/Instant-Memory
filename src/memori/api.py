@@ -71,7 +71,7 @@ def _retrieve_project_memories_fast(user_id: str) -> list[str]:
 
     results = [doc["content"] for doc in docs if doc.get("content")]
     logger.info(
-        "✅ RETRIEVAL COMPLETE | route=project_lookup | structured=%.1f ms | "
+        "✅ RETRIEVAL COMPLETE | user=%s | route=project_lookup | structured=%.1f ms | "
         "fallback=%.1f ms | memories=%d | total=%.1f ms | selected=%s",
         user_id, structured_ms, text_ms, len(results),
         (time.perf_counter() - started) * 1000,
@@ -152,7 +152,7 @@ def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
     results = [doc["content"] for doc in docs if doc.get("content")][:10]
 
     logger.info(
-        "✅ RETRIEVAL COMPLETE | route=workplace_lookup | structured=%.1f ms | "
+        "✅ RETRIEVAL COMPLETE | user=%s | route=workplace_lookup | structured=%.1f ms | "
         "fallback=%.1f ms | memories=%d | total=%.1f ms",
         user_id, structured_ms, text_ms, len(results),
         (time.perf_counter() - started) * 1000,
@@ -704,7 +704,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         fast_started = time.perf_counter()
         result["retrieval"] = _retrieve_people_who_know_user(user_id)
         logger.info(
-            "RETRIEVAL_TIMING user_id=%s path=knows_user_fast total_ms=%.2f result_count=%d",
+            "✅ RETRIEVAL COMPLETE | user=%s | route=relationship_lookup | elapsed=%.2f ms | memories=%d",
             user_id, (time.perf_counter() - fast_started) * 1000, len(result["retrieval"]),
         )
         return result
