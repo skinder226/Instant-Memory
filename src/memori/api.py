@@ -70,9 +70,9 @@ def _retrieve_project_memories_fast(user_id: str) -> list[str]:
         text_ms = (time.perf_counter() - query_started) * 1000
 
     results = [doc["content"] for doc in docs if doc.get("content")]
-    logger.warning(
-        "PROJECT_RETRIEVAL_TIMING user_id=%s structured_query_ms=%.1f "
-        "text_fallback_ms=%.1f results=%d total_ms=%.1f path=%s",
+    logger.info(
+        "✅ RETRIEVAL COMPLETE | route=project_lookup | structured=%.1f ms | "
+        "fallback=%.1f ms | memories=%d | total=%.1f ms | selected=%s",
         user_id, structured_ms, text_ms, len(results),
         (time.perf_counter() - started) * 1000,
         "structured" if structured_ms and not text_ms else "text_fallback",
@@ -151,9 +151,9 @@ def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
     ))
     results = [doc["content"] for doc in docs if doc.get("content")][:10]
 
-    logger.warning(
-        "WORKPLACE_RETRIEVAL_TIMING user_id=%s structured_query_ms=%.1f "
-        "text_fallback_ms=%.1f results=%d total_ms=%.1f",
+    logger.info(
+        "✅ RETRIEVAL COMPLETE | route=workplace_lookup | structured=%.1f ms | "
+        "fallback=%.1f ms | memories=%d | total=%.1f ms",
         user_id, structured_ms, text_ms, len(results),
         (time.perf_counter() - started) * 1000,
     )
@@ -730,7 +730,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         path = "mongo_lexical"
 
     logger.info(
-        "RETRIEVAL_TIMING user_id=%s path=%s total_ms=%.2f result_count=%d",
+        "✅ RETRIEVAL COMPLETE | user=%s | route=%s | elapsed=%.2f ms | memories=%d",
         user_id, path, (time.perf_counter() - fast_started) * 1000,
         len(result["retrieval"]),
     )
