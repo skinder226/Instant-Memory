@@ -911,7 +911,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         historical_results = _retrieve_project_memories_fast(
             user_id, include_history=True, query=user_input
         )
-        before_match = re.search(r"\\bbefore\\s+([A-Z][\\w.-]*)\\b", user_input, re.IGNORECASE)
+        before_match = re.search(r"\bbefore\s+([A-Z][\w.-]*)\b", user_input, re.IGNORECASE)
         anchor = before_match.group(1) if before_match else None
         if anchor and historical_results:
             result["retrieval"] = [
