@@ -44,6 +44,7 @@ long-term semantic memory extraction.
 from memori import (
     record_agent_event,
     retrieve_agent_history,
+    search_agent_events,
     save_agent_task,
     get_agent_task,
     list_resumable_agent_tasks,
@@ -79,6 +80,13 @@ events = retrieve_agent_history(
     user_id="user_123",
     session_id="session_456",
     limit=50,
+)
+
+# Search prior events across this user's sessions by a keyword or phrase.
+past_attempts = search_agent_events(
+    user_id="user_123",
+    query="deployment failed",
+    limit=20,
 )
 
 # Persist task progress so the host agent can resume after interruption.
