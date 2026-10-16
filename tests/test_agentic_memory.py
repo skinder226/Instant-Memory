@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from memori import agentic_memory
@@ -43,9 +45,19 @@ class _FakeCollection:
     @staticmethod
     def _matches(document, query):
         for key, expected in query.items():
+            if key == "$or":
+                if not any(_FakeCollection._matches(document, option) for option in expected):
+                    return False
+                continue
             actual = document.get(key)
             if isinstance(expected, dict) and "$in" in expected:
                 if actual not in expected["$in"]:
+                    return False
+            elif isinstance(expected, dict) and "$regex" in expected:
+                if actual is None or not re.search(
+                    expected["$regex"], str(actual),
+                    re.IGNORECASE if expected.get("$options") == "i" else 0,
+                ):
                     return False
             elif actual != expected:
                 return False
@@ -148,3 +160,22 @@ def test_invalid_event_role_is_rejected_before_database_access(monkeypatch):
         agentic_memory.record_agent_event(
             "user-1", "session-1", "turn-1", "browser-extension"
         )
+
+
+
+def test_cross_session_episodic_search_is_user_scoped(fake_db):
+    agentic_memory.record_agent_event(
+        "user-1", "session-old", "turn-1", "tool",
+        event_type="tool_result", content="Deployment failed after timeout",
+        event_id="event-old",
+    )
+    agentic_memory.record_agent_event(
+        "user-2", "session-other", "turn-1", "tool",
+        event_type="tool_result", content="Deployment failed for another user",
+        event_id="event-private",
+    )
+
+    results = agentic_memory.search_agent_events("user-1", "deployment failed")
+
+    assert len(results) == 1
+    assert results[0]["event_id"] == "event-old"
