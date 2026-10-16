@@ -1,5 +1,19 @@
 """Public interface for the Instant-Memory package."""
 
 from .api import memori
+from .agentic_memory import (
+    get_agent_task,
+    list_resumable_agent_tasks,
+    record_agent_event,
+    retrieve_agent_history,
+    save_agent_task,
+)
 
-__all__ = ["memori"]
+__all__ = [
+    "memori",
+    "record_agent_event",
+    "retrieve_agent_history",
+    "save_agent_task",
+    "get_agent_task",
+    "list_resumable_agent_tasks",
+]
