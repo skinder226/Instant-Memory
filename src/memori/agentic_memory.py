@@ -208,6 +208,41 @@ def retrieve_agent_history(
     return documents
 
 
+
+def search_agent_events(user_id: str, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Search prior agent events across a user's sessions using lexical matching.
+
+    This is a lightweight episodic lookup, not semantic/vector search. For best
+    results, keep concise summaries in event content and task summaries.
+    """
+    import re
+
+    user_id = _required_text(user_id, "user_id")
+    query = _required_text(query, "query")
+    if len(query) > 300:
+        raise ValueError("query must be 300 characters or fewer.")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100.")
+
+    events, _ = _collections()
+    pattern = re.escape(query)
+    documents = list(
+        events.find(
+            {
+                "user_id": user_id,
+                "$or": [
+                    {"content": {"$regex": pattern, "$options": "i"}},
+                    {"tool_name": {"$regex": pattern, "$options": "i"}},
+                    {"task_id": {"$regex": pattern, "$options": "i"}},
+                ],
+            },
+            {"_id": 0},
+        )
+        .sort("created_at", DESCENDING)
+        .limit(limit)
+    )
+    return documents
+
 def save_agent_task(
     user_id: str,
     task_id: str,
