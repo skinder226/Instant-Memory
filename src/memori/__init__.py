@@ -7,6 +7,7 @@ from .agentic_memory import (
     record_agent_event,
     retrieve_agent_history,
     save_agent_task,
+    search_agent_events,
 )
 
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "record_agent_event",
     "retrieve_agent_history",
     "save_agent_task",
+    "search_agent_events",
     "get_agent_task",
     "list_resumable_agent_tasks",
 ]
