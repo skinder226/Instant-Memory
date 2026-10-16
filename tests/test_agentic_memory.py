@@ -9,11 +9,17 @@ class _FakeCursor:
     def __init__(self, documents):
         self.documents = list(documents)
 
-    def sort(self, spec):
-        if isinstance(spec, str):
-            spec = [(spec, 1)]
-        for key, direction in reversed(spec):
-            self.documents.sort(key=lambda item: item.get(key) or "", reverse=direction < 0)
+    def sort(self, key_or_list, direction=None):
+        # Match both PyMongo forms: sort([("field", -1)]) and sort("field", -1).
+        if isinstance(key_or_list, str):
+            spec = [(key_or_list, direction if direction is not None else 1)]
+        else:
+            spec = list(key_or_list)
+        for key, order in reversed(spec):
+            self.documents.sort(
+                key=lambda item: item.get(key) or "",
+                reverse=order < 0,
+            )
         return self
 
     def limit(self, count):
