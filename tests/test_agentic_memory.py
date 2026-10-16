@@ -40,8 +40,19 @@ class _FakeCollection:
             for key, value in update.get("$setOnInsert", {}).items():
                 existing.setdefault(key, value)
 
+    @staticmethod
+    def _matches(document, query):
+        for key, expected in query.items():
+            actual = document.get(key)
+            if isinstance(expected, dict) and "$in" in expected:
+                if actual not in expected["$in"]:
+                    return False
+            elif actual != expected:
+                return False
+        return True
+
     def find_one(self, query, projection=None):
-        doc = next((d for d in self.documents if all(d.get(k) == v for k, v in query.items())), None)
+        doc = next((d for d in self.documents if self._matches(d, query)), None)
         if doc is None:
             return None
         if projection and projection.get("_id") == 0:
@@ -51,7 +62,7 @@ class _FakeCollection:
     def find(self, query, projection=None):
         docs = [
             dict(d) for d in self.documents
-            if all(d.get(k) == v for k, v in query.items())
+            if self._matches(d, query)
         ]
         if projection and projection.get("_id") == 0:
             docs = [{k: v for k, v in d.items() if k != "_id"} for d in docs]
