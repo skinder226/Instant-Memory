@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -17,6 +18,8 @@ from typing import Any, Mapping
 from pymongo import ASCENDING, DESCENDING
 
 logger = logging.getLogger(__name__)
+_indexes_ready = False
+_indexes_lock = threading.Lock()
 
 _EVENT_ROLES = {"user", "assistant", "tool", "system"}
 _EVENT_TYPES = {
@@ -70,31 +73,38 @@ def _collections():
 
 
 def ensure_agent_memory_indexes() -> None:
-    """Create indexes used by agent event and task retrieval."""
-    events, tasks = _collections()
-    events.create_index(
-        [("user_id", ASCENDING), ("event_id", ASCENDING)],
-        unique=True,
-        name="agent_event_user_event_unique",
-    )
-    events.create_index(
-        [("user_id", ASCENDING), ("session_id", ASCENDING), ("created_at", DESCENDING)],
-        name="agent_event_user_session_time",
-    )
-    events.create_index(
-        [("user_id", ASCENDING), ("task_id", ASCENDING), ("created_at", DESCENDING)],
-        name="agent_event_user_task_time",
-        sparse=True,
-    )
-    tasks.create_index(
-        [("user_id", ASCENDING), ("task_id", ASCENDING)],
-        unique=True,
-        name="agent_task_user_task_unique",
-    )
-    tasks.create_index(
-        [("user_id", ASCENDING), ("status", ASCENDING), ("updated_at", DESCENDING)],
-        name="agent_task_user_status_updated",
-    )
+    """Create indexes once per process, using a thread-safe lazy initializer."""
+    global _indexes_ready
+    if _indexes_ready:
+        return
+    with _indexes_lock:
+        if _indexes_ready:
+            return
+        events, tasks = _collections()
+        events.create_index(
+            [("user_id", ASCENDING), ("event_id", ASCENDING)],
+            unique=True,
+            name="agent_event_user_event_unique",
+        )
+        events.create_index(
+            [("user_id", ASCENDING), ("session_id", ASCENDING), ("created_at", DESCENDING)],
+            name="agent_event_user_session_time",
+        )
+        events.create_index(
+            [("user_id", ASCENDING), ("task_id", ASCENDING), ("created_at", DESCENDING)],
+            name="agent_event_user_task_time",
+            sparse=True,
+        )
+        tasks.create_index(
+            [("user_id", ASCENDING), ("task_id", ASCENDING)],
+            unique=True,
+            name="agent_task_user_task_unique",
+        )
+        tasks.create_index(
+            [("user_id", ASCENDING), ("status", ASCENDING), ("updated_at", DESCENDING)],
+            name="agent_task_user_status_updated",
+        )
+        _indexes_ready = True
 
 
 def record_agent_event(
