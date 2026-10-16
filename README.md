@@ -33,6 +33,90 @@ Use one function to retrieve memories for a message:
 
 The source parameter accepts user, assistant (or ai), tool, system, or another string. Unknown roles are normalized to other. The source role is stored on each extracted memory; it is not proof that a message's claims are true. Non-user messages are saved in the background but do not trigger user-question retrieval.
 
+
+## Agentic memory (episodic events and resumable tasks)
+
+Instant-Memory now exposes a separate API for storing structured agent events and
+resumable task state. These APIs complement, rather than replace, `memori()` and
+long-term semantic memory extraction.
+
+```python
+from memori import (
+    record_agent_event,
+    retrieve_agent_history,
+    save_agent_task,
+    get_agent_task,
+    list_resumable_agent_tasks,
+)
+
+# Persist the model's structured tool-call request.
+record_agent_event(
+    user_id="user_123",
+    session_id="session_456",
+    turn_id="turn_001",
+    role="assistant",
+    event_type="tool_call",
+    tool_name="search_web",
+    tool_call_id="call_abc",
+    tool_arguments={"query": "FastAPI latest release"},
+    content="Searching for the latest FastAPI release",
+)
+
+# Persist the matching tool result (redact secrets before storing).
+record_agent_event(
+    user_id="user_123",
+    session_id="session_456",
+    turn_id="turn_001",
+    role="tool",
+    event_type="tool_result",
+    tool_name="search_web",
+    tool_call_id="call_abc",
+    tool_result={"summary": "Search result summary"},
+)
+
+# Read the recent interaction in chronological order.
+events = retrieve_agent_history(
+    user_id="user_123",
+    session_id="session_456",
+    limit=50,
+)
+
+# Persist task progress so the host agent can resume after interruption.
+save_agent_task(
+    user_id="user_123",
+    task_id="task_789",
+    session_id="session_456",
+    goal="Compare the latest FastAPI release with the project version",
+    status="paused",
+    current_step="Check the project's pinned dependency",
+    completed_steps=["Search release notes"],
+    pending_steps=["Inspect project dependency file", "Compare versions"],
+    tool_history=[{"tool": "search_web", "status": "succeeded"}],
+)
+task = get_agent_task("user_123", "task_789")
+resumable = list_resumable_agent_tasks("user_123")
+```
+
+The APIs use two MongoDB collections: `agent_events` (append-only structured
+conversation/tool events) and `agent_tasks` (latest task state). Events are
+scoped by `user_id`, `session_id`, `turn_id`, and optional `task_id`. Pass a
+stable `event_id` when retrying a write to make that write idempotent. These
+collections are separate from the `memories` and `outbox` collections.
+
+Important integration notes:
+- The host agent must call these APIs around its own model/tool loop. Instant-Memory
+  does not itself execute tools or automatically intercept LangChain/LangGraph events.
+- Store the provider's structured tool-call fields and preserve `tool_call_id` so
+  tool results can be matched to their request.
+- Redact API keys, credentials, personal secrets, and oversized tool output before
+  recording events.
+- Event history retrieval is scoped to a session or task and returns the latest
+  events in chronological order. It is not a semantic search endpoint.
+- Task state records progress; the host application remains responsible for safe
+  resumption, authorization, idempotent tool execution, and updating task status.
+- These new collections and APIs require integration/failure-recovery tests against
+  your deployment before treating them as production-certified.
+
 ## Setup
 
 1. Install Python 3.11 or newer (below 3.15).
