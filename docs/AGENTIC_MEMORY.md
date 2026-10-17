@@ -31,6 +31,57 @@ When an agent starts work, save a task with status running, its goal, current st
 
 Use idempotency keys for external side effects (payments, sending messages, deployments) so a retry cannot accidentally perform the same action twice.
 
+## Reusable runtime API
+
+For application code, `AgenticMemoryRuntime` wraps a configured LangChain agent with the same memory layers used by the interactive test harness:
+
+- long-term memory retrieval via `memori(user_id, input, source="user")`;
+- recent session events and cross-session task history;
+- automatic user/assistant event persistence and LangChain tool start/result/error events;
+- task checkpoint creation, pause, and resume;
+- memory retrieval failures are surfaced in returned metadata and logged instead of silently claiming retrieval succeeded.
+
+The application still supplies the agent and its authorized tools. This runtime does not provide arbitrary browser, shell, email, payment, deployment, or file-system access by itself. Tool outputs and retrieved memory are untrusted data; redact secrets before persistence and authorize every side effect in the tool implementation.
+
+```python
+from langchain.agents import create_agent
+from langchain_groq import ChatGroq
+from langchain.tools import tool
+from memori import AgenticMemoryRuntime
+
+@tool
+def lookup_order(order_id: str) -> str:
+    """Look up an order in an application-owned, authorized system."""
+    # Replace this body with your real, access-controlled integration.
+    return f"Order {order_id}: lookup tool is connected."
+
+agent = create_agent(
+    model=ChatGroq(
+        api_key="YOUR_GROQ_API_KEY",
+        model="YOUR_TOOL-CALLING_MODEL",
+        temperature=0,
+    ),
+    tools=[lookup_order],
+    system_prompt="Help the user and use tools when needed. Never invent tool results.",
+)
+
+runtime = AgenticMemoryRuntime(user_id="authenticated_user_123", agent=agent)
+runtime.start_task(
+    "Investigate order status",
+    pending_steps=["Find the order", "Summarize the result"],
+)
+result = runtime.run("Check order ORD-1042 and summarize its status.")
+print(result["answer"])
+print("Retrieved memories:", result["retrieved_memory_count"])
+
+# At a later point / process, resume a previously saved task:
+# runtime.resume_task("task-id-from-your-task-list")
+# runtime.run("Continue from the saved checkpoint.")
+# runtime.pause()
+```
+
+`AgenticMemoryRuntime.run()` returns a dictionary containing `answer`, session/task/turn IDs, retrieved-memory count, background-save scheduling status, and any semantic retrieval error. Use a verified authenticated user ID; never trust a tenant ID supplied by an unauthenticated client.
+
 ## Interactive example
 
 Run the interactive integration harness from the repository root:
