@@ -33,24 +33,37 @@ Use idempotency keys for external side effects (payments, sending messages, depl
 
 ## Interactive example
 
-The repository's testing_agentic_chat.py is a sample host application. It persists events and task state, provides an event-search tool, and can use memori() to retrieve long-term facts before the LLM answers.
-
-Typical run:
+Run the interactive integration harness from the repository root:
 
 ```powershell
 uv run python testing_agentic_chat.py
 ```
 
-At startup it prints the session and task IDs. Keep them if you want to reopen that history. The intended CLI workflow is:
+It requires `mongodb_URI`, `Mem_llm_Api`, and `Mem_model` in `.env`.
+It uses `memori(user_id, user_input, source="user")` for long-term retrieval,
+loads recent event history and the active task checkpoint, and gives those
+three sources to the LangChain agent. Tool calls for task progress, resumable
+task listing, and past-event search are recorded in `agent_events`.
 
-- /history 30: inspect the current session's events.
-- /task: inspect the current task checkpoint.
-- /task-history 50: inspect events linked to the task.
-- /search Neo: search events for a keyword.
-- /resumable: list paused/pending/running tasks.
-- exit: save a paused task state and exit.
+Supported commands in the interactive loop:
 
-To reopen a specific session, pass its ID to --session-id. To continue a task in a new session, pass --resume-task TASK_ID. Confirm the script supports these options in your checked-out version before relying on them.
+- `/help`: show commands and example tasks.
+- `/history [N]`: inspect recent events in this session.
+- `/task`: inspect the active task checkpoint.
+- `/task-history [N]`: inspect events linked to the active task.
+- `/search WORDS`: search saved events across sessions.
+- `/resumable`: list pending, running, and paused tasks.
+- `/resume TASK_ID`: load a saved task checkpoint and its history on subsequent turns.
+- `/new-task`: start a new task.
+- `exit`: mark the active task paused and exit.
+
+Try realistic requests such as planning an app launch, creating a debugging
+checklist, preparing a handoff, or asking what happened during an earlier
+attempt. The model can persist task plans and checkpoints, but this test harness
+does not itself deploy applications, send emails, edit project files, or call
+arbitrary external business systems. Those actions require explicitly
+implemented and authorized tools. A saved checkpoint helps the agent resume;
+it does not guarantee that external side effects completed before a crash.
 
 ## Example: recording tool events
 
