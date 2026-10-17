@@ -13,6 +13,7 @@ from .agentic_memory import (
 
 __all__ = [
     "memori",
+    "AgenticMemoryRuntime",
     "record_agent_event",
     "retrieve_agent_history",
     "save_agent_task",
