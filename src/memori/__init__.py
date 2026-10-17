@@ -1,6 +1,7 @@
 """Public interface for the Instant-Memory package."""
 
 from .api import memori
+from .agentic_runtime import AgenticMemoryRuntime
 from .agentic_memory import (
     get_agent_task,
     list_resumable_agent_tasks,
