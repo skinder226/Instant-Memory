@@ -294,7 +294,7 @@ def _retrieve_people_who_know_user(user_id: str) -> list[str]:
         )
         content = str(doc.get("content") or "").strip()
         has_text_match = bool(content) and bool(
-            re.search(r"\\b(?:knows|friend|works with|colleague)\\b", content, re.IGNORECASE)
+            re.search(r"\b(?:knows|friend|works with|colleague)\b", content, re.IGNORECASE)
         )
         if has_relationship or has_text_match:
             matched.append((
