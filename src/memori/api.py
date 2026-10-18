@@ -758,17 +758,22 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                     "retrying with compact instructions",
                     user_id,
                 )
-                compact_prompt = (
-                    _compact_extractor_system_message()
-                    + f"\n\nRuntime timestamp: {datetime.now(timezone.utc).isoformat()}"
-                    + f"\nuser_id: {user_id}"
-                    + f"\nPending placeholders: {pending_placeholders[:8]}"
-                    + f"\nCaller-provided source_role: {role}"
-                )
-                response = invoke_with_retry(memory_extractor, [
-                    {"role": "system", "content": compact_prompt},
-                    {"role": "user", "content": user_input},
-                ])
+                
+            compact_prompt = (
+                _compact_extractor_system_message()
+                + "\n\nReturn a valid JSON object matching the required memory schema. "
+                "The word JSON is required; output JSON only."
+                + f"\nRuntime timestamp: {datetime.now(timezone.utc).isoformat()}"
+                + f"\nuser_id: {user_id}"
+                + f"\nPending placeholders: {pending_placeholders[:8]}"
+                + f"\nCaller-provided source_role: {role}"
+            )
+
+            response = invoke_with_retry(memory_extractor, [
+                {"role": "system", "content": compact_prompt},
+                {"role": "user", "content": user_input},
+            ])
+
 
         repaired_existing_project = False
         if response.memories:
