@@ -274,8 +274,10 @@ class AgenticMemoryRuntime:
                 },
                 "context_chars": len(_json_text(prompt_context, self.memory_limit_chars)),
                 "retrieval_error": memory_error,
-                "context": prompt_context,
-                "prompt": prompt[:50_000],
+                # Store bounded strings so metadata stays under agent_events' 50 KB
+                # document-field limit even when a memory contains a large payload.
+                "context": _json_text(prompt_context, 18_000),
+                "prompt": prompt[:12_000],
             },
         )
         recorder = _ToolEventRecorder(self, turn_id)
