@@ -53,12 +53,20 @@ They do **not** browse the internet, send email, book services, deploy software,
 
 The background memory saver may not finish before the next message. If a just-stated fact is not retrieved immediately, inspect the outbox/worker logs and verify that the memory was persisted and indexed before treating it as a retrieval defect.
 
-## Production limitations
+## Production mode and remaining limitations
 
-This is a local developer/test console, not a production-hardened multi-user web app.
+By default this remains a local developer/test console. A **single-tenant private deployment** can enable the built-in fail-closed password gate:
+
+```powershell
+$env:MEMORI_ENV = "production"
+$env:STREAMLIT_ACCESS_PASSWORD = "<strong unique password from your secret manager>"
+$env:STREAMLIT_PRODUCTION_USER_ID = "<fixed tenant ID>"
+uv run streamlit run streamlit_app.py --server.address 127.0.0.1
+```
+
+Set these values in your deployment's secret/configuration manager, not in committed files. Production mode refuses to start the UI unless both variables are configured, requires the password before displaying the app, and locks the tenant ID so the browser cannot switch users. Use HTTPS through a trusted reverse proxy when accessing it remotely. This is a shared-password, single-tenant gate—not enterprise identity, per-user authorization, or a substitute for network controls. For multiple users, put the app behind an identity-aware gateway and integrate a verified identity-to-tenant mapping; do not expose a user-editable tenant selector as authorization.
 
 Before deployment:
-- Put it behind authentication and authorization; never trust a user-editable `user_id` as identity.
 - Use TLS, secret management, network restrictions, least-privilege database credentials, and secure deployment configuration.
 - Add rate limits, request timeouts, concurrency limits, and model-cost controls.
 - Redact secrets before persistence, not just when displaying logs. Tool outputs and retrieved memories may contain sensitive data.

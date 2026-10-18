@@ -13,7 +13,7 @@ uv run streamlit run streamlit_app.py
 
 Open the local URL printed by Streamlit (usually `http://localhost:8501`). Configure `mongodb_URI`, `Mem_llm_Api`, and `Mem_model` in `.env`. The current UI tools can update task progress and search history; they do not perform arbitrary external actions.
 
-See [the Streamlit Studio guide](docs/STREAMLIT_STUDIO.md) for acceptance tests, diagnostics, and production-hardening requirements. The UI is a local development console, not an authenticated production service.
+See [the Streamlit Studio guide](docs/STREAMLIT_STUDIO.md) for acceptance tests, diagnostics, and production-hardening requirements. The UI runs in development mode by default; a fail-closed shared-password gate is available for a fixed single-tenant private deployment. Multi-user deployments still require an identity-aware gateway and verified tenant mapping.
 
 
 ## Public API

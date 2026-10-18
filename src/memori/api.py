@@ -294,7 +294,7 @@ def _retrieve_people_who_know_user(user_id: str) -> list[str]:
         )
         content = str(doc.get("content") or "").strip()
         has_text_match = bool(content) and bool(
-            re.search(r"\\b(?:knows|friend|works with|colleague)\\b", content, re.IGNORECASE)
+            re.search(r"\b(?:knows|friend|works with|colleague)\b", content, re.IGNORECASE)
         )
         if has_relationship or has_text_match:
             matched.append((
@@ -826,13 +826,27 @@ def _decide_and_save_background(user_id: str, user_input: str, role: str) -> Non
         from .worker import invoke_with_retry
 
         router_started = time.perf_counter()
-        logger.info("🤖 ROUTER START | user=%s | source=%s | message=%r",
-                    user_id, role, user_input[:300])
-        decision = invoke_with_retry(
-            MemoryDecisionGate,
-            [{"role": "system", "content": memory_decision_prompt},
-             {"role": "user", "content": user_input}],
-        )
+        logger.info("ROUTER START | user_id=%s | source=%s | message_chars=%d",
+                    user_id, role, len(user_input))
+        try:
+            decision = invoke_with_retry(
+                MemoryDecisionGate,
+                [{"role": "system", "content": memory_decision_prompt},
+                 {"role": "user", "content": user_input}],
+            )
+        except Exception as exc:
+            if not _is_request_too_large(exc):
+                raise
+            # The decision prompt may exceed provider limits even when the
+            # extractor can succeed with its compact-prompt fallback. Do not
+            # silently drop a user message solely because routing was oversized.
+            logger.warning(
+                "Memory decision request exceeded provider limit; bypassing gate "
+                "and using extractor safeguards for user_id=%s",
+                user_id,
+            )
+            _save_message_background(user_id, user_input, role, True)
+            return
         logger.info(
             "🤖 ROUTER DONE | user=%s | duration=%.0f ms | save=%s | needs_context=%s | retrieval_intent=%s",
             user_id, (time.perf_counter() - router_started) * 1000,
@@ -876,7 +890,12 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     }
 
     if role == "assistant":
-        # Assistant-generated answers are not source facts.
+        # Assistant messages skip retrieval, but still pass through extraction.
+        # source_role lets downstream consumers distinguish generated content.
+        _background_executor.submit(
+            _save_message_background, user_id, user_input, role, True,
+        )
+        result["memory_save_scheduled"] = True
         return result
 
     if role != "user":
