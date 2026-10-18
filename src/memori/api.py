@@ -607,7 +607,9 @@ def _is_request_too_large(error: Exception) -> bool:
 def _compact_extractor_system_message() -> str:
     """Small fallback prompt used only when the full prompt exceeds provider limits."""
     return (
-        "You are a memory extraction engine. Analyze ONLY the latest supplied message. "
+        "You are a memory extraction engine. "
+        "Return your result as valid JSON matching the supplied JSON schema. "
+        "Analyze ONLY the latest supplied message. "
         "Use existing memories only to detect duplicates, updates, and resolve listed placeholders; "
         "never treat context as new facts. Do not answer the message. Use the structured output schema. "
         "Return no memory for duplicate, non-durable, unsupported, or assistant-generated claims. "
