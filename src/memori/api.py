@@ -396,7 +396,8 @@ def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[st
         # Graph facts may contain the answer only in entity nodes/relationship,
         # not in the natural-language memory content.
         entity_parts = []
-        for entity in entities:            if not isinstance(entity, dict):
+        for entity in entities:            
+            if not isinstance(entity, dict):
                 continue
             entity_parts.append(str(entity.get("relationship") or "").lower().replace("_", " "))
             for node_key in ("source", "target"):
