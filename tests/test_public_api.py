@@ -70,17 +70,20 @@ def test_ai_source_skips_retrieval_but_schedules_background_save(monkeypatch):
 
 
 def test_oversized_decision_prompt_falls_back_to_extractor(monkeypatch):
+    import sys
+    import types
+
     from memori import api
-    from memori import worker
 
     saved = []
-    monkeypatch.setattr(
-        worker,
-        "invoke_with_retry",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            Exception("413 Request too large; tokens per minute exceeded")
-        ),
+    fake_llms = types.ModuleType("memori.llms")
+    fake_llms.MemoryDecisionGate = object()
+    fake_worker = types.ModuleType("memori.worker")
+    fake_worker.invoke_with_retry = lambda *args, **kwargs: (_ for _ in ()).throw(
+        Exception("413 Request too large; tokens per minute exceeded")
     )
+    monkeypatch.setitem(sys.modules, "memori.llms", fake_llms)
+    monkeypatch.setitem(sys.modules, "memori.worker", fake_worker)
     monkeypatch.setattr(api, "_is_request_too_large", lambda exc: "413" in str(exc))
     monkeypatch.setattr(
         api,
