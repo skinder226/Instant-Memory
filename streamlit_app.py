@@ -13,7 +13,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,6 +40,7 @@ st.set_page_config(page_title="Instant-Memory Studio", page_icon="🧠", layout=
 
 MAX_CHAT_CHARS = 12_000
 MAX_DISPLAY_CHARS = 20_000
+_TURN_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="streamlit-agent-turn")
 
 
 def safe_json(value: Any, limit: int = MAX_DISPLAY_CHARS) -> str:
@@ -354,7 +357,29 @@ with chat_tab:
                     st.write("2. Loading recent events and the task checkpoint")
                     st.write("3. Invoking the LLM and recording tool calls")
                     try:
-                        result = runtime.run(user_message)
+                        # Run the agent in a worker so this Streamlit script can poll
+                        # MongoDB and display persisted tool/context events while it works.
+                        turn_started = datetime.now(timezone.utc)
+                        future = _TURN_EXECUTOR.submit(runtime.run, user_message)
+                        live_trace = st.empty()
+                        while not future.done():
+                            live_events = list(db.agent_events.find(
+                                {"user_id": user_id, "session_id": runtime.session_id,
+                                 "created_at": {"$gte": turn_started}},
+                                {"_id": 0, "created_at": 1, "event_type": 1, "role": 1,
+                                 "content": 1, "tool_name": 1},
+                            ).sort("created_at", DESCENDING).limit(8))
+                            live_events.reverse()
+                            with live_trace.container(border=True):
+                                st.markdown("**Live trace — latest persisted events**")
+                                if not live_events:
+                                    st.caption("Waiting for retrieval and event logging…")
+                                for live_event in live_events:
+                                    st.markdown(f"- **{live_event.get('event_type')}** · "
+                                                f"{live_event.get('tool_name') or live_event.get('role', 'system')} — "
+                                                f"{str(redact_secrets(live_event.get('content', '')))[:220]}")
+                            time.sleep(0.7)
+                        result = future.result()
                         answer = result.get("answer") or "(The agent returned an empty answer.)"
                         status.update(label="Agent turn completed", state="complete", expanded=False)
                         st.markdown(answer)
