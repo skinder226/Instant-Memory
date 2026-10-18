@@ -48,3 +48,7 @@ def test_compact_extractor_prompt_is_small_and_has_core_rules():
     assert "Analyze ONLY the latest supplied message" in prompt
     assert "placeholder_updates" in prompt
     assert "source_role" in prompt
+    # Some OpenAI-compatible providers require the literal word "json"
+    # in a message when JSON response_format is enabled.
+    assert "json" in prompt.lower()
+    assert "valid json" in prompt.lower()
