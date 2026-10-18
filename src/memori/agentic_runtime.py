@@ -38,6 +38,40 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _redact(value: Any, *, key: str = "") -> Any:
+    """Redact common credential fields before tool payloads enter persistent event logs."""
+    import re
+
+    sensitive_key = re.compile(
+        r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|passwd|secret|"
+        r"private[_-]?key|client[_-]?secret|credential|cookie|session[_-]?token)",
+        re.IGNORECASE,
+    )
+    if sensitive_key.search(key):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(k): _redact(v, key=str(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item, key=key) for item in value]
+    if isinstance(value, str):
+        # Catch common token formats and credential-bearing URL userinfo.
+        value = re.sub(r"(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+=*", r"\\1[REDACTED]", value)
+        value = re.sub(
+            r"(?i)(mongodb(?:\\+srv)?://[^:/\\s]+:)[^@/\\s]+(@)",
+            r"\\1[REDACTED]\\2",
+            value,
+        )
+        value = re.sub(
+            r"(?i)((?:api[_-]?key|access[_-]?token|password|secret)\\s*[=:]\\s*)[^\\s,;]+",
+            r"\\1[REDACTED]",
+            value,
+        )
+        return value
+    return value
+
+
+
+
 class _ToolEventRecorder(BaseCallbackHandler):
     """Record LangChain tool execution without storing unbounded payloads."""
 
@@ -58,7 +92,7 @@ class _ToolEventRecorder(BaseCallbackHandler):
             turn_id=self.turn_id, role="assistant", event_type="tool_call",
             content=f"Calling tool {tool_name}",
             tool_name=tool_name, tool_call_id=call_id,
-            tool_arguments={"input": _json_text(inputs if inputs is not None else input_str, 6000)},
+            tool_arguments={"input": _json_text(_redact(inputs if inputs is not None else input_str), 6000)},
         )
 
     def on_tool_end(
@@ -67,7 +101,7 @@ class _ToolEventRecorder(BaseCallbackHandler):
     ) -> None:
         call_id = str(run_id)
         tool_name = self.tool_names.pop(call_id, "unknown_tool")
-        safe_output = _json_text(output, 8000)
+        safe_output = _json_text(_redact(output), 8000)
         self.runtime._event(
             turn_id=self.turn_id, role="tool", event_type="tool_result",
             content=f"Tool {tool_name} completed: {safe_output[:1500]}",
@@ -85,7 +119,7 @@ class _ToolEventRecorder(BaseCallbackHandler):
             turn_id=self.turn_id, role="tool", event_type="tool_result",
             content=f"Tool {tool_name} failed: {type(error).__name__}",
             tool_name=tool_name, tool_call_id=call_id,
-            tool_result={"error_type": type(error).__name__, "error": str(error)[:1000]},
+            tool_result={"error_type": type(error).__name__, "error": _redact(str(error)[:1000])},
         )
 
 
