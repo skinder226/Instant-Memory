@@ -821,8 +821,8 @@ def _decide_and_save_background(user_id: str, user_input: str, role: str) -> Non
         from .worker import invoke_with_retry
 
         router_started = time.perf_counter()
-        logger.info("🤖 ROUTER START | user=%s | source=%s | message=%r",
-                    user_id, role, user_input[:300])
+        logger.info("ROUTER START | user_id=%s | source=%s | message_chars=%d",
+                    user_id, role, len(user_input))
         decision = invoke_with_retry(
             MemoryDecisionGate,
             [{"role": "system", "content": memory_decision_prompt},
