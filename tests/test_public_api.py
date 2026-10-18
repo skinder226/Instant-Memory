@@ -48,3 +48,48 @@ def test_compact_extractor_prompt_is_small_and_has_core_rules():
     assert "Analyze ONLY the latest supplied message" in prompt
     assert "placeholder_updates" in prompt
     assert "source_role" in prompt
+
+
+def test_ai_source_skips_retrieval_but_schedules_background_save(monkeypatch):
+    from memori import api
+
+    scheduled = []
+    monkeypatch.setattr(
+        api._background_executor,
+        "submit",
+        lambda fn, *args, **kwargs: scheduled.append((fn, args, kwargs)),
+    )
+
+    result = api.memori("tenant-a", "The assistant summarized a saved preference.", source="ai")
+
+    assert result["retrieval"] == []
+    assert result["memory_save_scheduled"] is True
+    assert len(scheduled) == 1
+    assert scheduled[0][0] is api._save_message_background
+    assert scheduled[0][1][2] == "assistant"
+
+
+def test_oversized_decision_prompt_falls_back_to_extractor(monkeypatch):
+    from memori import api
+    from memori import worker
+
+    saved = []
+    monkeypatch.setattr(
+        worker,
+        "invoke_with_retry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            Exception("413 Request too large; tokens per minute exceeded")
+        ),
+    )
+    monkeypatch.setattr(api, "_is_request_too_large", lambda exc: "413" in str(exc))
+    monkeypatch.setattr(
+        api,
+        "_save_message_background",
+        lambda *args, **kwargs: saved.append((args, kwargs)),
+    )
+
+    api._decide_and_save_background("tenant-a", "Remember my current preference.", "user")
+
+    assert len(saved) == 1
+    assert saved[0][0] == ("tenant-a", "Remember my current preference.", "user", True)
+
