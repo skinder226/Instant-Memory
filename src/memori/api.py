@@ -197,8 +197,7 @@ def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
         docs = list(collection.find(
             {
                 **base_filter,
-                "content": {
-                    "$regex": r"\b(?:works at|work at|working at|employed at|works for|work for)\b",
+                "content": {                    "$regex": r"\b(?:works at|work at|working at|employed at|works for|work for)\b",
                     "$options": "i",
                 },
             },
@@ -397,8 +396,7 @@ def _retrieve_memories_fast(user_id: str, query: str, limit: int = 8) -> list[st
         # Graph facts may contain the answer only in entity nodes/relationship,
         # not in the natural-language memory content.
         entity_parts = []
-        for entity in entities:
-            if not isinstance(entity, dict):
+        for entity in entities:            if not isinstance(entity, dict):
                 continue
             entity_parts.append(str(entity.get("relationship") or "").lower().replace("_", " "))
             for node_key in ("source", "target"):
@@ -597,8 +595,7 @@ def _is_request_too_large(error: Exception) -> bool:
     message = str(error).lower()
     return status_code == 413 or any(
         marker in message
-        for marker in (
-            "tokens per minute", "request too large",
+        for marker in (            "tokens per minute", "request too large",
             "reduce your message size", "rate_limit_exceeded",
         )
     )
@@ -618,6 +615,7 @@ def _compact_extractor_system_message() -> str:
         "is genuinely unknown. Every placeholder must appear as (user_x) in content, in placeholders, "
         "and in any corresponding entity node. Resolve a listed placeholder only when this message "
         "provides its real value; output placeholder_updates and do not recreate that memory. "
+        "Return a valid JSON object matching the required memory schema; output JSON only. "
         "Memory type must be exactly one of profile, fact, preference, semantic, episodic, procedural, "
         "goal, event, task, project, temporal. Preserve source_role supplied by the caller. "
         "Return empty memories and placeholder_updates when nothing qualifies. "
@@ -797,8 +795,7 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                 db.outbox.update_many(
                     {"user_id": user_id, "placeholders": {"$elemMatch": {
                         "name": fp.name, "statuses.mongo_status": "pending",
-                    }}},
-                    {"$set": {"placeholders.$[p].value": fp.value, "updated_at": now}},
+                    }}},                    {"$set": {"placeholders.$[p].value": fp.value, "updated_at": now}},
                     array_filters=[{"p.name": fp.name, "p.statuses.mongo_status": "pending"}],
                 )
             pending = list(db.outbox.find({
@@ -998,19 +995,3 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     if _requires_personal_project_lookup(user_input):
         logger.info("RETRIEVAL_PATH user_id=%s path=project_fast", user_id)
         result["retrieval"] = _retrieve_project_memories_fast(user_id)
-        path = "project_fast"
-    elif _requires_personal_workplace_lookup(user_input):
-        logger.info("RETRIEVAL_PATH user_id=%s path=workplace_fast", user_id)
-        result["retrieval"] = _retrieve_workplace_memories_fast(user_id)
-        path = "workplace_fast"
-    else:
-        result["retrieval"] = _retrieve_memories_fast(user_id, user_input)
-        path = "mongo_lexical"
-
-    logger.info(
-        "✅ RETRIEVAL COMPLETE | user=%s | route=%s | elapsed=%.2f ms | memories=%d",
-        user_id, path, (time.perf_counter() - fast_started) * 1000,
-        len(result["retrieval"]),
-    )
-    return result
-
