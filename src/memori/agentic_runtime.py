@@ -55,15 +55,15 @@ def _redact(value: Any, *, key: str = "") -> Any:
         return [_redact(item, key=key) for item in value]
     if isinstance(value, str):
         # Catch common token formats and credential-bearing URL userinfo.
-        value = re.sub(r"(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+=*", r"\\1[REDACTED]", value)
+        value = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]+=*", r"\1[REDACTED]", value)
         value = re.sub(
-            r"(?i)(mongodb(?:\\+srv)?://[^:/\\s]+:)[^@/\\s]+(@)",
-            r"\\1[REDACTED]\\2",
+            r"(?i)(mongodb(?:\+srv)?://[^:/\s]+:)[^@/\s]+(@)",
+            r"\1[REDACTED]\2",
             value,
         )
         value = re.sub(
-            r"(?i)((?:api[_-]?key|access[_-]?token|password|secret)\\s*[=:]\\s*)[^\\s,;]+",
-            r"\\1[REDACTED]",
+            r"(?i)((?:api[_-]?key|access[_-]?token|password|secret)\s*[=:]\s*)[^\s,;]+",
+            r"\1[REDACTED]",
             value,
         )
         return value
