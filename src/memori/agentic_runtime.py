@@ -260,6 +260,24 @@ class AgenticMemoryRuntime:
             + "\n\nCURRENT USER REQUEST:\n"
             + user_input
         )
+        # Persist a bounded, inspectable snapshot so the Streamlit dashboard can
+        # show exactly which memories/events/checkpoint were supplied to the LLM.
+        self._event(
+            turn_id=turn_id, role="system", event_type="task_step",
+            content="Context assembled for agent",
+            metadata={
+                "kind": "context_assembly",
+                "counts": {
+                    "long_term_memories": len(long_term),
+                    "session_events": len(session_events),
+                    "task_events": len(task_events),
+                },
+                "context_chars": len(_json_text(prompt_context, self.memory_limit_chars)),
+                "retrieval_error": memory_error,
+                "context": prompt_context,
+                "prompt": prompt[:50_000],
+            },
+        )
         recorder = _ToolEventRecorder(self, turn_id)
         try:
             result = self.agent.invoke(
