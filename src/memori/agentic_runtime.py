@@ -276,8 +276,8 @@ class AgenticMemoryRuntime:
                 "retrieval_error": memory_error,
                 # Store bounded strings so metadata stays under agent_events' 50 KB
                 # document-field limit even when a memory contains a large payload.
-                "context": _json_text(prompt_context, 18_000),
-                "prompt": prompt[:12_000],
+                "context": _json_text(prompt_context, 12_000),
+                "prompt": prompt[:10_000],
             },
         )
         recorder = _ToolEventRecorder(self, turn_id)
