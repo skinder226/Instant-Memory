@@ -228,6 +228,9 @@ with st.sidebar:
             st.session_state.pop(key, None)
         st.rerun()
     refresh = st.checkbox("Auto-refresh traces (5 seconds)", value=False)
+    if refresh:
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=5000, key="instant_memory_studio_refresh")
     st.divider()
     st.subheader("Environment checks")
     st.write("MongoDB:", "✅ connected")
