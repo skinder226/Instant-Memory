@@ -996,3 +996,15 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     if _requires_personal_project_lookup(user_input):
         logger.info("RETRIEVAL_PATH user_id=%s path=project_fast", user_id)
         result["retrieval"] = _retrieve_project_memories_fast(user_id)
+
+    try:
+        result["retrieval"] = _retrieve_memories_fast(user_id, user_input)
+    except Exception:
+        logger.exception("General memory retrieval failed")
+        result["retrieval"] = []
+    logger.info(
+        "RETRIEVAL_TIMING user_id=%s path=general total_ms=%.2f result_count=%d",
+        user_id, (time.perf_counter() - fast_started) * 1000,
+        len(result["retrieval"]),
+    )
+    return result
