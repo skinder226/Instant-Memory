@@ -235,7 +235,13 @@ class AgenticMemoryRuntime:
         memory_result: dict[str, Any] = {}
         memory_error: str | None = None
         try:
-            memory_result = memori(self.user_id, user_input, source="user")
+            raw_memory_result = memori(self.user_id, user_input, source="user")
+            if not isinstance(raw_memory_result, dict):
+                raise TypeError(
+                    "memori() must return a dict; got "
+                    f"{type(raw_memory_result).__name__}. Check every return path in src/memori/api.py."
+                )
+            memory_result = raw_memory_result
             retrieved = memory_result.get("retrieval", [])
             long_term = retrieved if isinstance(retrieved, list) else []
         except Exception as exc:
