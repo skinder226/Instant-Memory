@@ -229,14 +229,19 @@ class AgenticMemoryRuntime:
         self._active_turn_id = turn_id
         self._event(turn_id=turn_id, role="user", event_type="message", content=user_input)
 
+        # Initialize every value before entering the retrieval call. A retrieval
+        # failure must never leave context assembly with an unbound local.
+        long_term: list[Any] = []
+        memory_result: dict[str, Any] = {}
+        memory_error: str | None = None
         try:
             memory_result = memori(self.user_id, user_input, source="user")
-            long_term = memory_result.get("retrieval", []) or []
-            memory_error = None
+            retrieved = memory_result.get("retrieval", [])
+            long_term = retrieved if isinstance(retrieved, list) else []
         except Exception as exc:
-            # Agent still answers, but it must know semantic retrieval failed.
+            # Retrieval is best-effort: the agent should still answer with the
+            # session/task context even when the memory API fails.
             logger.exception("Long-term memory retrieval failed")
-            long_term = []
             memory_error = f"{type(exc).__name__}: {exc}"
 
         session_events = retrieve_agent_history(
