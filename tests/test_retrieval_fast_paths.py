@@ -72,5 +72,5 @@ def test_workplace_fast_lookup_uses_shared_snapshot_and_prefers_structured_fact(
     monkeypatch.setattr(api, "_get_current_user_memories", lambda user_id: snapshot)
     assert api._retrieve_workplace_memories_fast("tenant-a") == [
         "The user works at Microsoft.",
-        "The user previously worked at Contoso.",
+        "The user is working at Contoso.",
     ]
