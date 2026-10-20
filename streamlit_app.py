@@ -10,8 +10,8 @@ only search history and update task checkpoints.
 """
 from __future__ import annotations
 
-import hmac
 import json
+import hashlib
 import os
 import re
 import time
@@ -39,38 +39,35 @@ from memori import (
 load_dotenv()
 st.set_page_config(page_title="Instant-Memory Studio", page_icon="🧠", layout="wide")
 
-# Production mode is deliberately fail-closed. This lightweight gate is for a
-# single-tenant private Studio deployment; use an identity-aware gateway and a
-# verified principal-to-user mapping for multi-user deployments.
+# Production authentication uses Streamlit's OIDC integration. Configure
+# [auth] in .streamlit/secrets.toml (or deployment secrets) with the company's
+# OIDC issuer/client credentials and redirect URI. Never accept user_id from
+# query parameters, form fields, or browser session state in production.
 PRODUCTION_MODE = os.getenv("MEMORI_ENV", "development").strip().lower() == "production"
-PRODUCTION_USER_ID = os.getenv("STREAMLIT_PRODUCTION_USER_ID", "").strip()
-PRODUCTION_ACCESS_PASSWORD = os.getenv("STREAMLIT_ACCESS_PASSWORD", "")
+AUTHENTICATED_USER_ID: str | None = None
 
 if PRODUCTION_MODE:
-    if not PRODUCTION_USER_ID or not PRODUCTION_ACCESS_PASSWORD:
-        st.error(
-            "Production mode requires STREAMLIT_PRODUCTION_USER_ID and "
-            "STREAMLIT_ACCESS_PASSWORD. Configure both in deployment secrets."
-        )
-        st.stop()
+    try:
+        if not st.user.is_logged_in:
+            st.title("Instant-Memory Studio")
+            st.write("Sign in using your organization's identity provider.")
+            st.login()
+            st.stop()
 
-    if not st.session_state.get("studio_authenticated", False):
-        st.title("🧠 Instant-Memory Studio")
-        with st.form("studio_login", clear_on_submit=True):
-            supplied_password = st.text_input("Access password", type="password")
-            submitted = st.form_submit_button("Sign in")
-        if submitted:
-            if hmac.compare_digest(supplied_password, PRODUCTION_ACCESS_PASSWORD):
-                st.session_state["studio_authenticated"] = True
-                st.session_state["selected_user_id"] = PRODUCTION_USER_ID
-                st.rerun()
-            else:
-                st.error("Invalid access password.")
+        # OIDC subject is the stable authenticated principal; combine it with
+        # issuer so subjects from different identity providers cannot collide.
+        claims = st.user
+        subject = str(claims.get("sub", "")).strip()
+        issuer = str(claims.get("iss", "")).strip()
+        if not subject or not issuer:
+            st.error("Verified OIDC identity is missing required issuer/subject claims.")
+            st.stop()
+        principal_digest = hashlib.sha256(f"{issuer}\\0{subject}".encode("utf-8")).hexdigest()
+        AUTHENTICATED_USER_ID = "oidc_" + principal_digest
+        st.session_state["selected_user_id"] = AUTHENTICATED_USER_ID
+    except Exception as exc:
+        st.error(f"Authentication configuration failed: {type(exc).__name__}. Check OIDC deployment secrets.")
         st.stop()
-
-    # A production deployment must not allow the browser to choose another
-    # tenant by editing the sidebar user ID.
-    st.session_state["selected_user_id"] = PRODUCTION_USER_ID
 
 MAX_CHAT_CHARS = 12_000
 MAX_DISPLAY_CHARS = 20_000
@@ -257,10 +254,10 @@ except Exception as exc:
 with st.sidebar:
     st.header("Workspace")
     if PRODUCTION_MODE:
-        user_id = PRODUCTION_USER_ID
-        st.caption("Production tenant scope is fixed by deployment configuration.")
+        user_id = AUTHENTICATED_USER_ID
+        st.caption("Your tenant is derived from your verified organization identity.")
         if st.button("Sign out", use_container_width=True):
-            st.session_state["studio_authenticated"] = False
+            st.logout()
             for key in (
                 "runtime", "chat_messages", "runtime_user", "active_session_id",
                 "active_task_id", "selected_user_id",
