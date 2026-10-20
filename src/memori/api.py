@@ -180,7 +180,8 @@ def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
                 str((doc.get("temporal") or {}).get("valid_from") or ""),
                 content,
             ))
-    matched.sort(key=lambda item: (item[0], item[1], item[2]))
+    matched.sort(key=lambda item: item[2], reverse=True)
+    matched.sort(key=lambda item: (item[0], item[1]))
     results, seen = [], set()
     for _, _, _, content in matched:
         if content and content not in seen:
