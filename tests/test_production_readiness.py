@@ -91,3 +91,35 @@ def test_memori_non_user_source_returns_dict_without_retrieval(monkeypatch):
     assert result["retrieval"] == []
     assert result["memory_save_scheduled"] is True
     assert scheduled
+
+
+def test_list_agent_tasks_includes_completed_tasks_and_is_user_scoped(monkeypatch):
+    """Historical task lookup must not filter out completed work."""
+    import memori.agentic_memory as memory
+
+    class FakeCursor:
+        def sort(self, *args, **kwargs):
+            return self
+        def limit(self, value):
+            return self
+        def __iter__(self):
+            return iter([
+                {"user_id": "test-user", "task_id": "website-done", "status": "completed", "goal": "Create a mini website"},
+                {"user_id": "test-user", "task_id": "active-chat", "status": "running", "goal": "Interactive Streamlit agent session"},
+            ])
+
+    class FakeTasks:
+        def find(self, query, projection):
+            assert query == {"user_id": "test-user"}
+            return FakeCursor()
+
+    monkeypatch.setattr(memory, "_collections", lambda: (None, FakeTasks()))
+    tasks = memory.list_agent_tasks("test-user", limit=20)
+    assert any(task["task_id"] == "website-done" and task["status"] == "completed" for task in tasks)
+
+
+def test_list_agent_tasks_rejects_invalid_limits():
+    import pytest
+    from memori.agentic_memory import list_agent_tasks
+    with pytest.raises(ValueError):
+        list_agent_tasks("test-user", limit=0)
