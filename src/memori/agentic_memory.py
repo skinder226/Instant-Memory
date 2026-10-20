@@ -324,6 +324,123 @@ def list_resumable_agent_tasks(user_id: str, limit: int = 50) -> list[dict[str, 
     )
 
 
+
+def search_agent_tasks(user_id: str, query: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Rank a user's task history by the original request and goal.
+
+    All statuses are included. For retrospective creation questions, prefer
+    tasks that actually represent website/app creation requests and rank by
+    original request/goal relevance before using creation time as a tie-breaker.
+    Activity timestamps are deliberately not used for recency: a running task
+    can be updated by the current question and otherwise outrank the task sought.
+    """
+    import re
+
+    user_id = _required_text(user_id, "user_id")
+    query = _required_text(query, "query")
+    if len(query) > 500:
+        raise ValueError("query must be 500 characters or fewer.")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100.")
+
+    tasks = list_agent_tasks(user_id, limit=500)
+    tokens = [
+        token.casefold()
+        for token in re.findall(r"[a-zA-Z0-9_-]+", query)
+        if len(token) > 2
+    ]
+    stop_words = {
+        "what", "which", "when", "where", "who", "how", "did", "does",
+        "the", "you", "your", "for", "and", "was", "were", "have", "has",
+        "last", "time", "about", "from", "with", "that", "this", "ask",
+        "asked", "tell", "type", "please", "me",
+    }
+    terms = [token for token in tokens if token not in stop_words]
+
+    retrospective_creation = bool(
+        re.search(r"\\b(last time|previously|before|earlier|previous|last)\\b", query, re.I)
+        and re.search(r"\\b(website|web site|site|landing page|web app|website)\\b", query, re.I)
+        and re.search(r"\\b(create|build|make|design|develop|asked|request)\\b", query, re.I)
+    )
+
+    def task_text(item: dict[str, Any]) -> tuple[str, str, str]:
+        context = item.get("context") or {}
+        request = str(context.get("last_user_request") or "")
+        goal = str(item.get("goal") or "")
+        summary = str(item.get("result_summary") or "")
+        return request, goal, summary
+
+    def is_creation_task(item: dict[str, Any]) -> bool:
+        request, goal, summary = task_text(item)
+        target_text = f"{goal} {request} {summary}".casefold()
+        goal_text = goal.casefold()
+        has_web_target = bool(re.search(
+            r"\\b(website|web site|websites|site|landing page|web app|web application)\\b",
+            target_text,
+        ))
+        has_creation_action = bool(re.search(
+            r"\\b(create|created|build|built|make|made|design|designed|develop|developed|landing page)\\b",
+            goal_text,
+        ) or re.search(
+            r"^\\s*(create|build|make|design|develop|please create|please build)\\b",
+            request,
+            re.I,
+        ))
+        # Do not treat the current retrospective question itself as the old
+        # creation request, even though it is stored in last_user_request.
+        request_is_meta_question = bool(re.search(
+            r"\\b(what type|what kind|did i ask|last time|previously|which website)\\b",
+            request,
+            re.I,
+        ))
+        if request_is_meta_question and not re.search(
+            r"^\\s*(create|build|make|design|develop|please create|please build)\\b",
+            request,
+            re.I,
+        ):
+            return False
+        return has_web_target and has_creation_action
+
+    scored: list[tuple[int, str, dict[str, Any]]] = []
+    for item in tasks:
+        request, goal, summary = task_text(item)
+        request_is_meta_question = bool(re.search(
+            r"\\b(what type|what kind|did i ask|last time|previously|which website)\\b",
+            request,
+            re.I,
+        ))
+        request_text = request.casefold() if not request_is_meta_question else ""
+        goal_text = goal.casefold()
+        summary_text = summary.casefold()
+        context = item.get("context") or {}
+        created_from = str(context.get("created_from") or "").casefold()
+
+        if retrospective_creation and not is_creation_task(item):
+            continue
+
+        score = 0
+        for term in terms:
+            if term in request_text:
+                score += 5
+            if term in goal_text:
+                score += 4
+            if term in summary_text:
+                score += 1
+            if term in created_from:
+                score += 1
+
+        if retrospective_creation and is_creation_task(item):
+            score += 8
+        if score:
+            created_at = item.get("created_at")
+            # ISO strings and datetimes sort deterministically as strings.
+            created_key = created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or "")
+            scored.append((score, created_key, item))
+
+    scored.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return [item for _, _, item in scored[:limit]]
+
+
 def list_agent_tasks(user_id: str, limit: int = 100) -> list[dict[str, Any]]:
     """List recent tasks of every status for a user, newest activity first.
 
