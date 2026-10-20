@@ -121,23 +121,20 @@ def _retrieve_project_memories_fast(user_id: str, include_history: bool = False,
             )
             return results[:5]
 
-    base_filter = {"user_id": user_id}
-    if not include_history:
-        base_filter["temporal.is_current"] = {"$ne": False}
-    project_docs = list(collection.find(
-        {**base_filter, "type": "project"}, projection
-    ).sort("temporal.valid_from", -1).limit(30))
-    text_docs = list(collection.find({
-        **base_filter,
-        "content": {"$regex": r"\b(?:project|working on|works on|building|built at|test project)\b", "$options": "i"},
-    }, projection).sort("temporal.valid_from", -1).limit(30))
-
-    by_id = {}
-    for doc in project_docs + text_docs:
-        key = str(doc.get("_id", doc.get("id", id(doc))))
-        by_id[key] = doc
-    docs = list(by_id.values())
-    docs.sort(key=lambda doc: str((doc.get("temporal") or {}).get("valid_from") or ""), reverse=True)
+    # Reuse the current-user snapshot instead of issuing two MongoDB queries.
+    docs = [
+        doc for doc in _get_current_user_memories(user_id)
+        if doc.get("type") == "project"
+        or re.search(
+            r"\b(?:project|working on|works on|building|built at|test project)\b",
+            str(doc.get("content") or ""),
+            re.IGNORECASE,
+        )
+    ]
+    docs.sort(
+        key=lambda doc: str((doc.get("temporal") or {}).get("valid_from") or ""),
+        reverse=True,
+    )
     results = [doc["content"] for doc in docs if doc.get("content")]
     logger.info(
         "RETRIEVAL_TIMING user_id=%s path=project_lookup total_ms=%.2f history=%s result_count=%d",
@@ -349,6 +346,9 @@ def _get_current_user_memories(user_id: str) -> list[dict]:
 
     with _USER_MEMORY_CACHE_LOCK:
         _USER_MEMORY_CACHE[user_id] = (time.monotonic(), docs)
+        # Bound process memory when a shared service sees many tenants.
+        while len(_USER_MEMORY_CACHE) > 256:
+            _USER_MEMORY_CACHE.pop(next(iter(_USER_MEMORY_CACHE)))
     return docs
 
 
