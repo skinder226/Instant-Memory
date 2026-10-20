@@ -358,9 +358,9 @@ def search_agent_tasks(user_id: str, query: str, limit: int = 50) -> list[dict[s
     terms = [token for token in tokens if token not in stop_words]
 
     retrospective_creation = bool(
-        re.search(r"\\b(last time|previously|before|earlier|previous|last)\\b", query, re.I)
-        and re.search(r"\\b(website|web site|site|landing page|web app|website)\\b", query, re.I)
-        and re.search(r"\\b(create|build|make|design|develop|asked|request)\\b", query, re.I)
+        re.search(r"\b(last time|previously|before|earlier|previous|last)\b", query, re.I)
+        and re.search(r"\b(website|web site|site|landing page|web app|website)\b", query, re.I)
+        and re.search(r"\b(create|build|make|design|develop|asked|request)\b", query, re.I)
     )
 
     def task_text(item: dict[str, Any]) -> tuple[str, str, str]:
@@ -375,26 +375,26 @@ def search_agent_tasks(user_id: str, query: str, limit: int = 50) -> list[dict[s
         target_text = f"{goal} {request} {summary}".casefold()
         goal_text = goal.casefold()
         has_web_target = bool(re.search(
-            r"\\b(website|web site|websites|site|landing page|web app|web application)\\b",
+            r"\b(website|web site|websites|site|landing page|web app|web application)\b",
             target_text,
         ))
         has_creation_action = bool(re.search(
-            r"\\b(create|created|build|built|make|made|design|designed|develop|developed|landing page)\\b",
+            r"\b(create|created|build|built|make|made|design|designed|develop|developed|landing page)\b",
             goal_text,
         ) or re.search(
-            r"^\\s*(create|build|make|design|develop|please create|please build)\\b",
+            r"^\s*(create|build|make|design|develop|please create|please build)\b",
             request,
             re.I,
         ))
         # Do not treat the current retrospective question itself as the old
         # creation request, even though it is stored in last_user_request.
         request_is_meta_question = bool(re.search(
-            r"\\b(what type|what kind|did i ask|last time|previously|which website)\\b",
+            r"\b(what type|what kind|did i ask|last time|previously|which website)\b",
             request,
             re.I,
         ))
         if request_is_meta_question and not re.search(
-            r"^\\s*(create|build|make|design|develop|please create|please build)\\b",
+            r"^\s*(create|build|make|design|develop|please create|please build)\b",
             request,
             re.I,
         ):
@@ -405,7 +405,7 @@ def search_agent_tasks(user_id: str, query: str, limit: int = 50) -> list[dict[s
     for item in tasks:
         request, goal, summary = task_text(item)
         request_is_meta_question = bool(re.search(
-            r"\\b(what type|what kind|did i ask|last time|previously|which website)\\b",
+            r"\b(what type|what kind|did i ask|last time|previously|which website)\b",
             request,
             re.I,
         ))
