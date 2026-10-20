@@ -57,7 +57,7 @@ def test_workplace_fast_lookup_uses_shared_snapshot_and_prefers_structured_fact(
             "temporal": {"valid_from": "2026-10-01"},
         },
         {
-            "content": "The user previously worked at Contoso.",
+            "content": "The user is working at Contoso.",
             "type": "profile",
             "entities": [],
             "temporal": {"valid_from": "2026-10-02"},
