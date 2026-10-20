@@ -56,3 +56,38 @@ def test_historical_project_questions_are_distinguished():
     assert _requires_historical_project_lookup("What was my project before Orion?")
     assert _requires_historical_project_lookup("What was my previous project?")
     assert not _requires_historical_project_lookup("What is my current project?")
+
+
+def test_memori_statement_returns_dict_and_schedules_background_save(monkeypatch):
+    import memori.api as api
+    scheduled = []
+    monkeypatch.setattr(api._background_executor, "submit", lambda *args, **kwargs: scheduled.append((args, kwargs)))
+    result = api.memori("test-user", "I work at Example Corp", source="user")
+    assert isinstance(result, dict)
+    assert result["user_id"] == "test-user"
+    assert result["source"] == "user"
+    assert isinstance(result["retrieval"], list)
+    assert result["memory_save_scheduled"] is True
+    assert scheduled
+
+
+def test_memori_question_returns_dict_and_retrieves(monkeypatch):
+    import memori.api as api
+    expected = ["The user works at Example Corp."]
+    monkeypatch.setattr(api, "_retrieve_workplace_memories_fast", lambda user_id: expected)
+    result = api.memori("test-user", "Where do I work?", source="user")
+    assert isinstance(result, dict)
+    assert result["retrieval"] == expected
+    assert result["memory_save_scheduled"] is False
+
+
+def test_memori_non_user_source_returns_dict_without_retrieval(monkeypatch):
+    import memori.api as api
+    scheduled = []
+    monkeypatch.setattr(api._background_executor, "submit", lambda *args, **kwargs: scheduled.append(args))
+    result = api.memori("test-user", "I am an assistant response", source="AI")
+    assert isinstance(result, dict)
+    assert result["source"] == "assistant"
+    assert result["retrieval"] == []
+    assert result["memory_save_scheduled"] is True
+    assert scheduled
