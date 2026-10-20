@@ -34,3 +34,43 @@ def test_people_lookup_does_not_return_unrelated_text(monkeypatch):
     )
 
     assert api._retrieve_people_who_know_user("tenant-a") == []
+
+
+def test_project_fast_lookup_uses_shared_user_snapshot(monkeypatch):
+    snapshot = [
+        {"content": "The user is building Neo.", "type": "project", "temporal": {"valid_from": "2026-10-01"}},
+        {"content": "The user works at Microsoft.", "type": "profile", "temporal": {"valid_from": "2026-10-02"}},
+        {"content": "Old unrelated note.", "type": "note", "temporal": {"valid_from": "2026-09-01"}},
+    ]
+    monkeypatch.setattr(api, "_get_current_user_memories", lambda user_id: snapshot)
+    assert api._retrieve_project_memories_fast("tenant-a") == [
+        "The user is building Neo.",
+    ]
+
+
+def test_workplace_fast_lookup_uses_shared_snapshot_and_prefers_structured_fact(monkeypatch):
+    snapshot = [
+        {
+            "content": "The user works at Microsoft.",
+            "type": "profile",
+            "entities": [{"relationship": "works_at"}],
+            "temporal": {"valid_from": "2026-10-01"},
+        },
+        {
+            "content": "The user previously worked at Contoso.",
+            "type": "profile",
+            "entities": [],
+            "temporal": {"valid_from": "2026-10-02"},
+        },
+        {
+            "content": "The user likes Python.",
+            "type": "preference",
+            "entities": [],
+            "temporal": {"valid_from": "2026-10-03"},
+        },
+    ]
+    monkeypatch.setattr(api, "_get_current_user_memories", lambda user_id: snapshot)
+    assert api._retrieve_workplace_memories_fast("tenant-a") == [
+        "The user works at Microsoft.",
+        "The user previously worked at Contoso.",
+    ]
