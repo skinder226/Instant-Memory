@@ -155,69 +155,42 @@ def _requires_personal_workplace_lookup(message: str) -> bool:
 
 
 def _retrieve_workplace_memories_fast(user_id: str) -> list[str]:
-    """Retrieve current workplace facts with selective MongoDB queries.
-
-    First use the explicit entity relationship, then fall back to workplace
-    wording in the user's own current memories. MongoDB remains the source of
-    truth; no LLM, embedding, Pinecone, or Neo4j call is on this path.
-    """
-    from .mongodb_connection import db
-
-    collection = db["memories"]
-    projection = {"content": 1, "type": 1, "entities": 1, "temporal": 1}
-    base_filter = {
-        "user_id": user_id,
-        "temporal.is_current": {"$ne": False},
-    }
+    """Retrieve current workplace facts from the shared tenant-scoped snapshot."""
     started = time.perf_counter()
-
-    # Best path: match the structured relationship directly. This is backed
-    # by the compound index added for entities.relationship.
-    query_started = time.perf_counter()
-    docs = list(collection.find(
-        {
-            **base_filter,
-            "entities.relationship": {
-                "$in": ["works_at", "works for", "employed_at", "employed_by"]
-            },
-        },
-        projection,
-    ).limit(20))
-    structured_ms = (time.perf_counter() - query_started) * 1000
-
-    # Fallback: support older memories that contain the fact only in text.
-    # Do not limit an unrelated batch before filtering it, which could omit
-    # the correct workplace fact when a user's memory store grows.
-    text_ms = 0.0
-    if not docs:
-        query_started = time.perf_counter()
-        docs = list(collection.find(
-            {
-                **base_filter,
-                "content": {                    "$regex": r"\b(?:works at|work at|working at|employed at|works for|work for)\b",
-                    "$options": "i",
-                },
-            },
-            projection,
-        ).limit(20))
-        text_ms = (time.perf_counter() - query_started) * 1000
-
-    docs.sort(key=lambda doc: (
-        0 if any(
+    docs = _get_current_user_memories(user_id)
+    relations = {"works_at", "works for", "employed_at", "employed_by"}
+    matched = []
+    for doc in docs:
+        entities = doc.get("entities") or []
+        structured = any(
             isinstance(entity, dict)
-            and str(entity.get("relationship", "")).lower()
-            in {"works_at", "works for", "employed_at", "employed_by"}
-            for entity in (doc.get("entities") or [])
-        ) else 1,
-        0 if doc.get("type") == "profile" else 1,
-    ))
-    results = [doc["content"] for doc in docs if doc.get("content")][:10]
-
+            and str(entity.get("relationship") or "").strip().lower() in relations
+            for entity in entities
+        )
+        content = str(doc.get("content") or "")
+        text_match = bool(re.search(
+            r"\b(?:works at|work at|working at|employed at|works for|work for)\b",
+            content,
+            re.IGNORECASE,
+        ))
+        if structured or text_match:
+            matched.append((
+                0 if structured else 1,
+                0 if doc.get("type") == "profile" else 1,
+                str((doc.get("temporal") or {}).get("valid_from") or ""),
+                content,
+            ))
+    matched.sort(key=lambda item: (item[0], item[1], item[2]))
+    results, seen = [], set()
+    for _, _, _, content in matched:
+        if content and content not in seen:
+            results.append(content)
+            seen.add(content)
+        if len(results) >= 10:
+            break
     logger.info(
-        "✅ RETRIEVAL COMPLETE | user=%s | route=workplace_lookup | structured=%.1f ms | "
-        "fallback=%.1f ms | memories=%d | total=%.1f ms",
-        user_id, structured_ms, text_ms, len(results),
-        (time.perf_counter() - started) * 1000,
+        "RETRIEVAL_TIMING user_id=%s path=workplace_snapshot total_ms=%.2f scanned=%d result_count=%d",
+        user_id, (time.perf_counter() - started) * 1000, len(docs), len(results),
     )
     return results
 
