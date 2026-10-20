@@ -30,11 +30,13 @@ from langchain_groq import ChatGroq
 from memori import (
     AgenticMemoryRuntime,
     get_agent_task,
-    list_resumable_agent_tasks,\n    list_agent_tasks,
+    list_resumable_agent_tasks,
+    list_agent_tasks,
     retrieve_agent_history,
     save_agent_task,
     search_agent_events,
 )
+from memori.agentic_memory import search_agent_tasks
 
 load_dotenv()
 st.set_page_config(page_title="Instant-Memory Studio", page_icon="🧠", layout="wide")
@@ -173,37 +175,26 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
 
     @tool
     def search_past_tasks(query: str, limit: int = 50) -> str:
-        """Search historical tasks across ALL statuses, including completed tasks.
+        """Search this authenticated user's historical tasks, ranked by relevance.
 
-        Use this for questions about what the user previously asked you to create,
-        what work was completed, or what they requested last time. Compare the
-        original request in context.last_user_request, goal, result_summary, and
-        timestamps; do not assume the active/running task is the relevant answer.
+        Includes completed and running tasks. For questions such as "what type
+        of website did I ask you to create last time", use the first ranked
+        matching creation request, not the most recently updated active task.
+        The ranking prioritizes the original request and goal, and uses task
+        creation time only to break relevance ties.
         """
-        import re
-        terms = [term.casefold() for term in re.findall(r"[a-zA-Z0-9_-]+", query) if len(term) > 2]
-        tasks = list_agent_tasks(user_id, limit=max(1, min(int(limit), 100)))
-        scored = []
-        for item in tasks:
-            context = item.get("context") or {}
-            searchable = " ".join(str(value) for value in (
-                item.get("goal", ""), item.get("result_summary", ""),
-                context.get("last_user_request", ""), context.get("created_from", ""),
-                item.get("current_step", ""),
-            )).casefold()
-            score = sum(1 for term in terms if term in searchable)
-            if score:
-                scored.append((score, item))
-        scored.sort(key=lambda pair: (pair[0], pair[1].get("updated_at") or pair[1].get("created_at")), reverse=True)
+        tasks = search_agent_tasks(user_id, query, limit=max(1, min(int(limit), 50)))
         return safe_json([{
-            "task_id": item.get("task_id"), "goal": item.get("goal"),
-            "status": item.get("status"), "created_at": item.get("created_at"),
+            "task_id": item.get("task_id"),
+            "goal": item.get("goal"),
+            "status": item.get("status"),
+            "created_at": item.get("created_at"),
             "updated_at": item.get("updated_at"),
             "last_user_request": (item.get("context") or {}).get("last_user_request"),
             "result_summary": item.get("result_summary"),
             "completed_steps": item.get("completed_steps", []),
             "pending_steps": item.get("pending_steps", []),
-        } for _, item in scored[:max(1, min(int(limit), 50))]], 12_000)
+        } for item in tasks], 12_000)
 
     @tool
     def list_resumable_tasks() -> str:
@@ -235,8 +226,10 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
             "inference and mention retrieval failures when relevant. Use search_past_events for "
             "conversation history and search_past_tasks for historical task/request questions, including "
             "completed tasks. For 'what did I ask you to create last time', search all task statuses, "
-            "rank by the original user request and goal relevance, then timestamps; never answer from "
-            "the active checkpoint alone. Use list_resumable_tasks only for unfinished "
+            "trust the ranked order from search_past_tasks: select the most relevant matching "
+            "historical request, not the newest task activity or a task containing the current question. "
+            "For 'last time' creation questions, use the first ranked matching creation task and cite its "
+            "original last_user_request and goal in your answer. Use list_resumable_tasks only for unfinished "
             "work. For multi-step tasks, call update_task_progress at meaningful milestones and "
             "preserve completed versus pending steps. Never claim an external action happened unless "
             "an authorized tool actually performed it. The tools in this demo can update checkpoints "
