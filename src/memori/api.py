@@ -758,20 +758,20 @@ def _save_message_background(user_id: str, user_input: str, role: str,
                     user_id,
                 )
                 
-            compact_prompt = (
-                _compact_extractor_system_message()
-                + "\n\nReturn a valid JSON object matching the required memory schema. "
-                "The word JSON is required; output JSON only."
-                + f"\nRuntime timestamp: {datetime.now(timezone.utc).isoformat()}"
-                + f"\nuser_id: {user_id}"
-                + f"\nPending placeholders: {pending_placeholders[:8]}"
-                + f"\nCaller-provided source_role: {role}"
-            )
+                compact_prompt = (
+                    _compact_extractor_system_message()
+                    + "\n\nReturn a valid JSON object matching the required memory schema. "
+                    "The word JSON is required; output JSON only."
+                    + f"\nRuntime timestamp: {datetime.now(timezone.utc).isoformat()}"
+                    + f"\nuser_id: {user_id}"
+                    + f"\nPending placeholders: {pending_placeholders[:8]}"
+                    + f"\nCaller-provided source_role: {role}"
+                )
 
-            response = invoke_with_retry(memory_extractor, [
-                {"role": "system", "content": compact_prompt},
-                {"role": "user", "content": user_input},
-            ])
+                response = invoke_with_retry(memory_extractor, [
+                    {"role": "system", "content": compact_prompt},
+                    {"role": "user", "content": user_input},
+                ])
 
 
         repaired_existing_project = False
@@ -867,6 +867,16 @@ def _log_background_future(future):
         logger.debug("Unused parallel query-converter call failed", exc_info=True)
 
 
+_QUESTION_START_RE = re.compile(
+    r"^\s*(?:what|which|who|whom|whose|where|when|why|how|do|does|did|is|are|was|were|can|could|tell me|name)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_question(text: str) -> bool:
+    return text.strip().endswith("?") or bool(_QUESTION_START_RE.match(text))
+
+
 def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     """Retrieve synchronously only when needed; save asynchronously.
 
@@ -906,11 +916,12 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     # Collaborator questions can refer to a historical project. Search the
     # named person's records across temporal states rather than only current
     # project memories.
+    is_question = _looks_like_question(user_input)
     collaborator_match = re.search(
-        r"\b(?:project|working on|worked on)\b.{0,50}\bwith\s+([A-Z][\w.-]*)\b|"
-        r"\bwith\s+([A-Z][\w.-]*)\b.{0,50}\b(?:project|working on|worked on)\b",
+        r"\b(?:project|working on|worked on)\b.{0,50}\bwith\s+((?-i:[A-Z])[\w.-]*)\b|"
+        r"\bwith\s+((?-i:[A-Z])[\w.-]*)\b.{0,50}\b(?:project|working on|worked on)\b",
         user_input, re.I,
-    )
+    ) if is_question else None
     if collaborator_match:
         name = next(group for group in collaborator_match.groups() if group)
         from .mongodb_connection import db
@@ -929,7 +940,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     # resolved historical relation to the result: the stored memory's content
     # may describe Atlas but not repeat the anchor ("before Orion"), even though
     # this retrieval path selected it specifically for that predecessor query.
-    if _requires_historical_project_lookup(user_input):
+    if is_question and _requires_historical_project_lookup(user_input):
         historical_results = _retrieve_project_memories_fast(
             user_id, include_history=True, query=user_input
         )
@@ -948,7 +959,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     # Fast path for direct project questions: read the user's current project
     # memories from MongoDB directly, avoiding decision/converter LLM calls,
     # embeddings, Pinecone, and Neo4j on this common lookup.
-    if _requires_personal_project_lookup(user_input):
+    if is_question and _requires_personal_project_lookup(user_input):
         fast_started = time.perf_counter()
         logger.info("RETRIEVAL_PATH user_id=%s path=project_fast", user_id)
         # A direct lookup question is not new source information. Avoid an
@@ -963,7 +974,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
 
     # Direct workplace questions need only the current workplace fact from MongoDB.
     # Avoid the embedding, Pinecone, and Neo4j network calls for this simple lookup.
-    if _requires_personal_workplace_lookup(user_input):
+    if is_question and _requires_personal_workplace_lookup(user_input):
         fast_started = time.perf_counter()
         logger.info("RETRIEVAL_PATH user_id=%s path=workplace_fast", user_id)
         # Avoid an unnecessary provider request for a direct fact lookup.
@@ -976,7 +987,7 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         return result
 
     # Relationship questions need relation-aware lookup, not keyword overlap.
-    if _requires_knows_user_lookup(user_input):
+    if is_question and _requires_knows_user_lookup(user_input):
         fast_started = time.perf_counter()
         result["retrieval"] = _retrieve_people_who_know_user(user_id)
         logger.info(
@@ -993,9 +1004,10 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     )
     result["memory_save_scheduled"] = True
 
-    if _requires_personal_project_lookup(user_input):
+    if is_question and _requires_personal_project_lookup(user_input):
         logger.info("RETRIEVAL_PATH user_id=%s path=project_fast", user_id)
         result["retrieval"] = _retrieve_project_memories_fast(user_id)
+        return result
 
     try:
         result["retrieval"] = _retrieve_memories_fast(user_id, user_input)

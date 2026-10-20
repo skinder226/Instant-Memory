@@ -1,3 +1,15 @@
+import logging
+import sys
+
+# Show memori's INFO logs (ROUTER START/DONE, RETRIEVAL_TIMING, save results) in the terminal.
+_log = logging.getLogger("memori")
+if not _log.handlers:
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _log.addHandler(_handler)
+_log.setLevel(logging.INFO)
+_log.propagate = False
+
 """Public interface for the Instant-Memory package."""
 
 from .api import memori
