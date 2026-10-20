@@ -4,7 +4,7 @@ from .api import memori
 from .agentic_runtime import AgenticMemoryRuntime
 from .agentic_memory import (
     get_agent_task,
-    list_resumable_agent_tasks,
+    list_resumable_agent_tasks,\n    list_agent_tasks,
     record_agent_event,
     retrieve_agent_history,
     save_agent_task,
@@ -19,5 +19,5 @@ __all__ = [
     "save_agent_task",
     "search_agent_events",
     "get_agent_task",
-    "list_resumable_agent_tasks",
+    "list_resumable_agent_tasks",\n    "list_agent_tasks",
 ]
