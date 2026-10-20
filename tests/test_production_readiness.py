@@ -123,3 +123,87 @@ def test_list_agent_tasks_rejects_invalid_limits():
     from memori.agentic_memory import list_agent_tasks
     with pytest.raises(ValueError):
         list_agent_tasks("test-user", limit=0)
+
+
+
+def test_historical_website_question_ranks_latest_relevant_creation_request_first(monkeypatch):
+    """A running task containing today's question must not beat the prior website request."""
+    from datetime import datetime, timezone
+    import memori.agentic_memory as memory
+
+    tasks = [
+        {
+            "user_id": "user_125",
+            "task_id": "task-0575f9a071a9",
+            "goal": "Interactive Streamlit agent session",
+            "status": "running",
+            "created_at": datetime(2026, 10, 20, 11, 24, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 10, 20, 11, 25, tzinfo=timezone.utc),
+            "context": {"last_user_request": "What type of website i will ask you to create last time"},
+            "result_summary": "Interactive Streamlit-based website",
+        },
+        {
+            "user_id": "user_125",
+            "task_id": "task-12f7331774e2",
+            "goal": "Create a professional, hand-designed website per user specifications",
+            "status": "completed",
+            "created_at": datetime(2026, 10, 19, 12, 44, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 10, 19, 13, 9, tzinfo=timezone.utc),
+            "context": {"last_user_request": "I want for the start up instant memory ok build it"},
+            "result_summary": "Professional website for the Instant Memory startup with design assets and documentation",
+        },
+        {
+            "user_id": "user_125",
+            "task_id": "task-e85d16d30548",
+            "goal": "Create a mini website as requested by user",
+            "status": "completed",
+            "created_at": datetime(2026, 10, 20, 11, 19, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 10, 20, 11, 24, tzinfo=timezone.utc),
+            "context": {"last_user_request": "OK create a mini website"},
+            "result_summary": "Simple static landing page with HTML/CSS and deployment instructions",
+        },
+        {
+            "user_id": "user_125",
+            "task_id": "task-61226f6f3292",
+            "goal": "Interactive Streamlit agent session",
+            "status": "running",
+            "created_at": datetime(2026, 10, 20, 11, 25, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 10, 20, 11, 26, tzinfo=timezone.utc),
+            "context": {"last_user_request": "What type of website did I ask you to create last time?"},
+            "result_summary": "Current interactive Streamlit agent session",
+        },
+    ]
+    requested_users = []
+
+    def fake_list_agent_tasks(user_id, limit=100):
+        requested_users.append(user_id)
+        return [task for task in tasks if task["user_id"] == user_id]
+
+    monkeypatch.setattr(memory, "list_agent_tasks", fake_list_agent_tasks)
+    ranked = memory.search_agent_tasks(
+        "user_125",
+        "What type of website did I ask you to create last time?",
+    )
+
+    assert requested_users == ["user_125"]
+    assert ranked[0]["task_id"] == "task-e85d16d30548"
+    assert ranked[0]["context"]["last_user_request"] == "OK create a mini website"
+    assert all(task["task_id"] not in {"task-0575f9a071a9", "task-61226f6f3292"} for task in ranked)
+
+
+def test_historical_task_search_never_reads_another_users_tasks(monkeypatch):
+    import memori.agentic_memory as memory
+
+    def fake_list_agent_tasks(user_id, limit=100):
+        assert user_id == "verified-tenant-1"
+        return [{
+            "user_id": user_id,
+            "task_id": "tenant-one-task",
+            "goal": "Create a mini website",
+            "status": "completed",
+            "context": {"last_user_request": "Create a mini website"},
+        }]
+
+    monkeypatch.setattr(memory, "list_agent_tasks", fake_list_agent_tasks)
+    ranked = memory.search_agent_tasks("verified-tenant-1", "What website did I ask you to create last time?")
+    assert [task["task_id"] for task in ranked] == ["tenant-one-task"]
