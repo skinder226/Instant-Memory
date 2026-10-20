@@ -29,7 +29,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "rapidfuzz>=3.14.6",
     "rich>=15.0.0",
-    "streamlit>=1.40.0",
+    "streamlit>=1.42.0",
     "streamlit-autorefresh>=1.0.1",
 ]
 

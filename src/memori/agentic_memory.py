@@ -322,3 +322,20 @@ def list_resumable_agent_tasks(user_id: str, limit: int = 50) -> list[dict[str, 
         .sort("updated_at", DESCENDING)
         .limit(limit)
     )
+
+
+def list_agent_tasks(user_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    """List recent tasks of every status for a user, newest activity first.
+
+    Unlike list_resumable_agent_tasks(), this includes completed and failed
+    tasks so historical questions can refer to work that is already finished.
+    """
+    user_id = _required_text(user_id, "user_id")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+        raise ValueError("limit must be an integer between 1 and 500.")
+    _, tasks = _collections()
+    return list(
+        tasks.find({"user_id": user_id}, {"_id": 0})
+        .sort([("updated_at", DESCENDING), ("created_at", DESCENDING)])
+        .limit(limit)
+    )
