@@ -51,8 +51,8 @@ def summarize(samples_ms: list[float]) -> dict[str, float]:
 
 def run_scenario(user_id: str, query: str, runs: int, cold_cache: bool) -> dict[str, Any]:
     samples: list[float] = []
-    result_count = 0
-    save_scheduled = False
+    result_counts: list[int] = []
+    save_scheduled_runs = 0
 
     for _ in range(runs):
         if cold_cache:
@@ -62,16 +62,22 @@ def run_scenario(user_id: str, query: str, runs: int, cold_cache: bool) -> dict[
         started = time.perf_counter()
         result = api.memori(user_id, query, source="user")
         samples.append((time.perf_counter() - started) * 1000)
-        result_count = len(result.get("retrieval") or [])
-        save_scheduled = bool(result.get("memory_save_scheduled"))
+        result_counts.append(len(result.get("retrieval") or []))
+        save_scheduled_runs += bool(result.get("memory_save_scheduled"))
 
     return {
         "query": query,
-        "cache_mode": "cold-per-run" if cold_cache else "natural",
+        "cache_mode": "snapshot-cold-per-run" if cold_cache else "natural",
         "runs": runs,
         **summarize(samples),
-        "retrieval_count": result_count,
-        "memory_save_scheduled": save_scheduled,
+        "retrieval_count_last_run": result_counts[-1],
+        "retrieval_count_min": min(result_counts),
+        "retrieval_count_max": max(result_counts),
+        "memory_save_scheduled_runs": save_scheduled_runs,
+        "note": (
+            "Cold mode clears only the in-process current-memory snapshot before each call; "
+            "it does not reset database contents, network pools, or provider/service caches."
+        ),
     }
 
 
