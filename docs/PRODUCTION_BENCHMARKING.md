@@ -16,25 +16,25 @@ These unit tests do not prove live MongoDB, Pinecone, Neo4j, or provider availab
 Use a dedicated test tenant with representative current memories, historical project records, friend/relationship facts, and completed task history. Do not benchmark against a real user's account unless authorized.
 
 ```powershell
-uv run python scripts/benchmark_production.py --user-id user_125 --runs 10 --quiet-logs
+uv run python scripts/benchmark_production.py --user-id user_125 --runs 50 --no-background-saves --quiet-logs
 ```
 
 Measure the cold snapshot separately:
 
 ```powershell
-uv run python scripts/benchmark_production.py --user-id user_125 --runs 10 --cold-cache --quiet-logs
+uv run python scripts/benchmark_production.py --user-id user_125 --runs 50 --cold-cache --no-background-saves --quiet-logs
 ```
 
 Choose one route at a time to diagnose regressions:
 
 ```powershell
-uv run python scripts/benchmark_production.py --user-id user_125 --scenario workplace --runs 30
-uv run python scripts/benchmark_production.py --user-id user_125 --scenario project --runs 30
-uv run python scripts/benchmark_production.py --user-id user_125 --scenario history --runs 30
-uv run python scripts/benchmark_production.py --user-id user_125 --scenario past_task --runs 30
+uv run python scripts/benchmark_production.py --user-id user_125 --scenario workplace --runs 30 --no-background-saves
+uv run python scripts/benchmark_production.py --user-id user_125 --scenario project --runs 30 --no-background-saves
+uv run python scripts/benchmark_production.py --user-id user_125 --scenario history --runs 30 --no-background-saves
+uv run python scripts/benchmark_production.py --user-id user_125 --scenario past_task --runs 30 --no-background-saves
 ```
 
-The script calls the real `memori()` API and reports min, median, p95, p99, max, retrieval count, and whether background saving was scheduled. It never prints retrieved memory contents. Timings depend on the tenant's data, service health, network, and whether each route uses a cache. Use the same tenant and environment when comparing commits. The greeting and generic-question routes are expected to bypass retrieval; their result count should be zero by design.
+The script calls the real `memori()` API and reports min, median, p95, p99, max, retrieval count, and whether background saving was scheduled. Use `--no-background-saves` for repeated route-latency measurements: it intercepts new submissions to the API background executor so the benchmark does not create a burst of provider calls. It does not cancel jobs already queued/running before the benchmark or suppress work submitted to other executors. It never prints retrieved memory contents. Timings depend on the tenant's data, service health, network, and whether each route uses a cache. Use the same tenant and environment when comparing commits. The greeting and generic-question routes are expected to bypass retrieval; their result count should be zero by design.
 
 ## 3. Required release checks
 
