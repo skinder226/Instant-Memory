@@ -69,14 +69,19 @@ def _retrieve_project_memories_fast(user_id: str, include_history: bool = False,
                     for entity in (doc.get("entities") or [])
                 )
             ]
+            current_mongo_ids = [str(doc["_id"]) for doc in current_docs if doc.get("_id")]
+            # Batch the supersession lookup. One query avoids the previous
+            # per-project outbox round-trips on history questions.
             superseded_ids = []
-            for current in current_docs:
-                event = db["outbox"].find_one(
-                    {"user_id": user_id, "mongo_id": str(current.get("_id"))},
-                    {"supersedes_memory_ids": 1},
+            if current_mongo_ids:
+                events = db["outbox"].find(
+                    {"user_id": user_id, "mongo_id": {"$in": current_mongo_ids}},
+                    {"_id": 0, "supersedes_memory_ids": 1},
                 )
-                if event:
-                    superseded_ids.extend(str(value) for value in (event.get("supersedes_memory_ids") or []))
+                for event in events:
+                    superseded_ids.extend(
+                        str(value) for value in (event.get("supersedes_memory_ids") or [])
+                    )
             object_ids = [ObjectId(value) for value in dict.fromkeys(superseded_ids) if ObjectId.is_valid(value)]
             if object_ids:
                 linked_docs = list(collection.find({
