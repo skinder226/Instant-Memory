@@ -851,6 +851,37 @@ def _looks_like_question(text: str) -> bool:
     return text.strip().endswith("?") or bool(_QUESTION_START_RE.match(text))
 
 
+_GREETING_RE = re.compile(
+    r"^(?:hi|hello|hey|hiya|howdy|good\s+(?:morning|afternoon|evening)|"
+    r"thanks|thank\s+you|thx|bye|goodbye|see\s+you|how\s+are\s+you)"
+    r"[!.?,\s]*$",
+    re.IGNORECASE,
+)
+_PERSONAL_MEMORY_INTENT_RE = re.compile(
+    r"\\b(?:my|mine|me|our|ours|remember|recall|previous|previously|before|"
+    r"last time|earlier|history|historical|memory|memories|project|employer|"
+    r"workplace|job|career|friend|colleague|knows me|what did i ask|"
+    r"what have i told you|what do you know about me|task|website did i ask)\\b",
+    re.IGNORECASE,
+)
+
+
+def _is_low_value_chat_turn(message: str) -> bool:
+    """Avoid memory retrieval and extraction routing for greetings/thanks and generic questions.
+
+    Questions containing explicit personal-memory/history/task signals continue through
+    retrieval, even when phrased as short or generic-looking questions.
+    """
+    text = message.strip()
+    if not text:
+        return False
+    if _GREETING_RE.fullmatch(text):
+        return True
+    if _looks_like_question(text):
+        return not bool(_PERSONAL_MEMORY_INTENT_RE.search(text))
+    return False
+
+
 def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     """Retrieve synchronously only when needed; save asynchronously.
 
@@ -885,6 +916,12 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
             _save_message_background, user_id, user_input, role, True,
         )
         result["memory_save_scheduled"] = True
+        return result
+
+    # Greetings, acknowledgements, and general knowledge questions should not
+    # pay for memory retrieval or an LLM save-decision call. Personal-memory,
+    # task, project, and history questions are explicitly preserved below.
+    if _is_low_value_chat_turn(user_input):
         return result
 
     # Collaborator questions can refer to a historical project. Search the
