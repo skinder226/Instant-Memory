@@ -858,10 +858,10 @@ _GREETING_RE = re.compile(
     re.IGNORECASE,
 )
 _PERSONAL_MEMORY_INTENT_RE = re.compile(
-    r"\\b(?:my|mine|me|our|ours|remember|recall|previous|previously|before|"
+    r"\b(?:my|mine|me|our|ours|remember|recall|previous|previously|before|"
     r"last time|earlier|history|historical|memory|memories|project|employer|"
     r"workplace|job|career|friend|colleague|knows me|what did i ask|"
-    r"what have i told you|what do you know about me|task|website did i ask)\\b",
+    r"what have i told you|what do you know about me|task|website did i ask)\b",
     re.IGNORECASE,
 )
 
