@@ -74,3 +74,26 @@ def test_workplace_fast_lookup_uses_shared_snapshot_and_prefers_structured_fact(
         "The user works at Microsoft.",
         "The user is working at Contoso.",
     ]
+
+
+def test_direct_friend_question_is_recognized_as_relationship_lookup():
+    assert api._requires_personal_relationship_lookup("Who is my friend?")
+    assert api._requires_personal_relationship_lookup("Who are my colleagues?")
+    assert api._requires_personal_relationship_lookup("Who do I work with?")
+    assert not api._requires_personal_relationship_lookup("Who knows me?")
+
+
+def test_direct_friend_question_does_not_schedule_background_save(monkeypatch):
+    monkeypatch.setattr(
+        api, "_retrieve_people_who_know_user",
+        lambda user_id: ["Fasil is the user's friend."],
+    )
+
+    class BrokenExecutor:
+        def submit(self, *args, **kwargs):
+            raise AssertionError("Read-only relationship lookup must not schedule a save")
+
+    monkeypatch.setattr(api, "_background_executor", BrokenExecutor())
+    result = api.memori("tenant-a", "Who is my friend?", source="user")
+    assert result["retrieval"] == ["Fasil is the user's friend."]
+    assert result["memory_save_scheduled"] is False
