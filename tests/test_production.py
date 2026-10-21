@@ -104,7 +104,7 @@ def test_task_search_prefers_matching_original_creation_request(monkeypatch):
     ]
     requested_users = []
 
-    def fake_list(user_id, limit=100):
+    def fake_list(user_id, limit=100, **kwargs):
         requested_users.append(user_id)
         return tasks
 
@@ -121,7 +121,7 @@ def test_task_search_prefers_matching_original_creation_request(monkeypatch):
 
 
 def test_task_search_does_not_cross_user_boundary(monkeypatch):
-    def fake_list(user_id, limit=100):
+    def fake_list(user_id, limit=100, **kwargs):
         assert user_id == "tenant-a"
         return [{
             "user_id": "tenant-a",
