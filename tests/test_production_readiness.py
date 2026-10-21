@@ -175,7 +175,7 @@ def test_historical_website_question_ranks_latest_relevant_creation_request_firs
     ]
     requested_users = []
 
-    def fake_list_agent_tasks(user_id, limit=100):
+    def fake_list_agent_tasks(user_id, limit=100, **kwargs):
         requested_users.append(user_id)
         return [task for task in tasks if task["user_id"] == user_id]
 
@@ -194,7 +194,7 @@ def test_historical_website_question_ranks_latest_relevant_creation_request_firs
 def test_historical_task_search_never_reads_another_users_tasks(monkeypatch):
     import memori.agentic_memory as memory
 
-    def fake_list_agent_tasks(user_id, limit=100):
+    def fake_list_agent_tasks(user_id, limit=100, **kwargs):
         assert user_id == "verified-tenant-1"
         return [{
             "user_id": user_id,
