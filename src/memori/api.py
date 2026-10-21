@@ -882,6 +882,51 @@ def _is_low_value_chat_turn(message: str) -> bool:
     return False
 
 
+
+_PAST_TASK_QUESTION_RE = re.compile(
+    r"\b(?:what|which|where|when|how)\b.{0,100}\b(?:last time|previously|before|earlier|previous|last)\b"
+    r".{0,100}\b(?:ask(?:ed)?|request(?:ed)?|tell|website|web\s?site|site|task|project|build|create|make|design|develop)\b|"
+    r"\bwhat\b.{0,70}\b(?:website|web\s?site|site|task|project)\b.{0,70}\b(?:did i ask|i asked|last time|previously|before|earlier)\b",
+    re.IGNORECASE,
+)
+
+
+def _requires_past_task_lookup(message: str) -> bool:
+    """Recognize retrospective questions about prior requests or completed tasks."""
+    text = message.strip()
+    if not _looks_like_question(text):
+        return False
+    return bool(_PAST_TASK_QUESTION_RE.search(text))
+
+
+def _retrieve_past_tasks_fast(user_id: str, query: str) -> list[str]:
+    """Search only this tenant's stored task history and format relevant matches."""
+    from .agentic_memory import search_agent_tasks
+
+    started = time.perf_counter()
+    tasks = search_agent_tasks(user_id, query, limit=5)
+    results = []
+    for task in tasks:
+        context = task.get("context") or {}
+        request = str(context.get("last_user_request") or "").strip()
+        goal = str(task.get("goal") or "").strip()
+        summary = str(task.get("result_summary") or "").strip()
+        details = []
+        if request and request.casefold() not in query.casefold():
+            details.append(f"Original request: {request}")
+        if goal:
+            details.append(f"Task goal: {goal}")
+        if summary:
+            details.append(f"Result: {summary}")
+        if details:
+            results.append("Past task — " + "; ".join(details))
+    logger.info(
+        "RETRIEVAL_TIMING user_id=%s path=past_task total_ms=%.2f result_count=%d",
+        user_id, (time.perf_counter() - started) * 1000, len(results),
+    )
+    return results
+
+
 def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     """Retrieve synchronously only when needed; save asynchronously.
 
@@ -945,6 +990,17 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
             ],
         }, {"content": 1, "temporal": 1, "type": 1, "entities": 1}).sort("temporal.valid_from", -1).limit(20))
         result["retrieval"] = [doc["content"] for doc in docs if doc.get("content")]
+        return result
+
+    # Retrospective task questions search task history, not semantic memories.
+    # Do not schedule extraction for the question itself or let it overwrite
+    # the task's original request context.
+    if is_question and _requires_past_task_lookup(user_input):
+        try:
+            result["retrieval"] = _retrieve_past_tasks_fast(user_id, user_input)
+        except Exception:
+            logger.exception("Past-task retrieval failed for user_id=%s", user_id)
+            result["retrieval"] = []
         return result
 
     # Historical project questions must include superseded records. Attach the
