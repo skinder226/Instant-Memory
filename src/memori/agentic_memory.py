@@ -104,6 +104,10 @@ def ensure_agent_memory_indexes() -> None:
             [("user_id", ASCENDING), ("status", ASCENDING), ("updated_at", DESCENDING)],
             name="agent_task_user_status_updated",
         )
+        tasks.create_index(
+            [("user_id", ASCENDING), ("created_at", DESCENDING)],
+            name="agent_task_user_created",
+        )
         _indexes_ready = True
 
 
@@ -343,7 +347,27 @@ def search_agent_tasks(user_id: str, query: str, limit: int = 50) -> list[dict[s
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
         raise ValueError("limit must be an integer between 1 and 100.")
 
-    tasks = list_agent_tasks(user_id, limit=500)
+    # Search only the fields used for ranking. Loading full task histories
+    # (tool logs, steps, and potentially large context payloads) adds avoidable
+    # MongoDB transfer and deserialization latency to a read-only lookup.
+    _, tasks_collection = _collections()
+    ensure_agent_memory_indexes()
+    tasks = list(
+        tasks_collection.find(
+            {"user_id": user_id},
+            {
+                "_id": 0,
+                "task_id": 1,
+                "goal": 1,
+                "result_summary": 1,
+                "context.last_user_request": 1,
+                "context.created_from": 1,
+                "created_at": 1,
+            },
+        )
+        .sort("created_at", DESCENDING)
+        .limit(500)
+    )
     tokens = [
         token.casefold()
         for token in re.findall(r"[a-zA-Z0-9_-]+", query)
