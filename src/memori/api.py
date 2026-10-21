@@ -225,6 +225,19 @@ _KNOWS_USER_QUESTION_RE = re.compile(
 )
 
 
+ _PERSONAL_RELATIONSHIP_QUESTION_RE = re.compile(
+    r"\bwho\b.{0,35}\b(?:is|are)\s+(?:my|our)\s+"
+    r"(?:friend|friends|colleague|colleagues|coworker|coworkers|teammate|teammates)\b|"
+    r"\bwho\b.{0,35}\b(?:do|does)\s+(?:i|we)\s+work\s+with\b",
+    re.IGNORECASE,
+)
+
+
+def _requires_personal_relationship_lookup(message: str) -> bool:
+    """Recognize direct questions about the user's known friends/collaborators."""
+    return bool(_PERSONAL_RELATIONSHIP_QUESTION_RE.search(message.strip()))
+
+
 def _requires_knows_user_lookup(message: str) -> bool:
     """Recognize relationship questions, including common misspellings like 'knwos'."""
     text = message.strip().lower()
@@ -1056,7 +1069,12 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         return result
 
     # Relationship questions need relation-aware lookup, not keyword overlap.
-    if is_question and _requires_knows_user_lookup(user_input):
+    # Keep direct friend/colleague questions off the save-decision LLM path:
+    # repeated read-only questions must not enqueue duplicate memory writes.
+    if is_question and (
+        _requires_knows_user_lookup(user_input)
+        or _requires_personal_relationship_lookup(user_input)
+    ):
         fast_started = time.perf_counter()
         result["retrieval"] = _retrieve_people_who_know_user(user_id)
         logger.info(
