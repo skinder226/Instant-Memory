@@ -225,7 +225,7 @@ _KNOWS_USER_QUESTION_RE = re.compile(
 )
 
 
- _PERSONAL_RELATIONSHIP_QUESTION_RE = re.compile(
+_PERSONAL_RELATIONSHIP_QUESTION_RE = re.compile(
     r"\bwho\b.{0,35}\b(?:is|are)\s+(?:my|our)\s+"
     r"(?:friend|friends|colleague|colleagues|coworker|coworkers|teammate|teammates)\b|"
     r"\bwho\b.{0,35}\b(?:do|does)\s+(?:i|we)\s+work\s+with\b",
