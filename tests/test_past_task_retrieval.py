@@ -6,6 +6,7 @@ def test_past_task_question_is_detected():
     assert api._requires_past_task_lookup("What website did I ask you to create last time?")
     assert api._requires_past_task_lookup("Which task did I work on previously?")
     assert not api._requires_past_task_lookup("What project am I working on?")
+    assert not api._requires_past_task_lookup("What project did I work on before Orion?")
     assert not api._requires_past_task_lookup("What is photosynthesis?")
 
 
