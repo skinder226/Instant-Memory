@@ -1,4 +1,5 @@
 import logging
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -263,16 +264,41 @@ def save_pending_memory(user_id):
 
 
 def invoke_with_retry(runnable, messages, retries=3):
-    """Retry transient 429/503 responses with bounded exponential backoff."""
+    """Retry transient 429/503 responses, honoring numeric Retry-After headers."""
     for attempt in range(retries):
         try:
             return runnable.invoke(messages)
         except APIStatusError as exc:
             if exc.status_code not in (429, 503) or attempt == retries - 1:
                 raise
-            wait = min(2 ** attempt, 8)
+
+            headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+            retry_after = headers.get("retry-after") or headers.get("Retry-After")
+            wait = None
+            if retry_after is not None:
+                try:
+                    wait = float(retry_after)
+                except (TypeError, ValueError):
+                    # HTTP-date Retry-After values are not numeric; fall back
+                    # to bounded backoff rather than failing the save worker.
+                    wait = None
+
+            if wait is None:
+                # Jitter avoids synchronized workers retrying in lockstep.
+                wait = min(2 ** attempt, 8) + random.uniform(0, 0.25)
+            if wait < 0:
+                wait = 0
+            if wait > 60:
+                logger.warning(
+                    "LLM temporarily unavailable (%s); Retry-After=%ss exceeds "
+                    "the worker wait budget, deferring to the outbox retry cycle",
+                    exc.status_code, wait,
+                )
+                raise
+
             logger.warning(
-                "LLM temporarily unavailable (%s); retrying in %ss",
+                "LLM temporarily unavailable (%s); retrying in %.2fs",
                 exc.status_code, wait,
             )
             time.sleep(wait)
+    raise RuntimeError("Retry loop exited without a result")
