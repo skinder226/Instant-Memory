@@ -313,10 +313,12 @@ def _get_current_user_memories(user_id: str) -> list[dict]:
             return cached[1]
 
     from .mongodb_connection import db
+    # Consumers rank/filter this snapshot locally. Avoid a server-side sort over
+    # every current memory on a cache miss; it adds latency without changing results.
     docs = list(db["memories"].find(
         {"user_id": user_id, "temporal.is_current": {"$ne": False}},
         {"_id": 0, "content": 1, "type": 1, "temporal": 1, "entities": 1},
-    ).sort("temporal.valid_from", -1))
+    ))
 
     with _USER_MEMORY_CACHE_LOCK:
         _USER_MEMORY_CACHE[user_id] = (time.monotonic(), docs)
