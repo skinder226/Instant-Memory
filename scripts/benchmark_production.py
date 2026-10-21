@@ -49,21 +49,44 @@ def summarize(samples_ms: list[float]) -> dict[str, float]:
     }
 
 
-def run_scenario(user_id: str, query: str, runs: int, cold_cache: bool) -> dict[str, Any]:
+class _BenchmarkNoSaveExecutor:
+    """Record save submissions without executing provider calls during a benchmark."""
+
+    def __init__(self) -> None:
+        self.submissions = 0
+
+    def submit(self, *args: Any, **kwargs: Any) -> None:
+        self.submissions += 1
+        return None
+
+
+def run_scenario(
+    user_id: str, query: str, runs: int, cold_cache: bool, no_background_saves: bool
+) -> dict[str, Any]:
     samples: list[float] = []
     result_counts: list[int] = []
     save_scheduled_runs = 0
+    skipped_save_submissions = 0
+    original_executor = api._background_executor
+    benchmark_executor = _BenchmarkNoSaveExecutor()
+    if no_background_saves:
+        api._background_executor = benchmark_executor
 
-    for _ in range(runs):
-        if cold_cache:
-            with api._USER_MEMORY_CACHE_LOCK:
-                api._USER_MEMORY_CACHE.pop(user_id, None)
+    try:
+        for _ in range(runs):
+            if cold_cache:
+                with api._USER_MEMORY_CACHE_LOCK:
+                    api._USER_MEMORY_CACHE.pop(user_id, None)
 
-        started = time.perf_counter()
-        result = api.memori(user_id, query, source="user")
-        samples.append((time.perf_counter() - started) * 1000)
-        result_counts.append(len(result.get("retrieval") or []))
-        save_scheduled_runs += bool(result.get("memory_save_scheduled"))
+            started = time.perf_counter()
+            result = api.memori(user_id, query, source="user")
+            samples.append((time.perf_counter() - started) * 1000)
+            result_counts.append(len(result.get("retrieval") or []))
+            save_scheduled_runs += bool(result.get("memory_save_scheduled"))
+    finally:
+        if no_background_saves:
+            skipped_save_submissions = benchmark_executor.submissions
+            api._background_executor = original_executor
 
     return {
         "query": query,
@@ -74,9 +97,15 @@ def run_scenario(user_id: str, query: str, runs: int, cold_cache: bool) -> dict[
         "retrieval_count_min": min(result_counts),
         "retrieval_count_max": max(result_counts),
         "memory_save_scheduled_runs": save_scheduled_runs,
+        "background_save_submissions_skipped": skipped_save_submissions,
         "note": (
             "Cold mode clears only the in-process current-memory snapshot before each call; "
             "it does not reset database contents, network pools, or provider/service caches."
+            + (
+                " Background save submissions were intercepted and not executed."
+                if no_background_saves else
+                " Background saves were enabled and may call external LLM providers."
+            )
         ),
     }
 
@@ -92,6 +121,10 @@ def main() -> None:
     parser.add_argument(
         "--cold-cache", action="store_true",
         help="Clear the in-process current-memory snapshot before each run",
+    )
+    parser.add_argument(
+        "--no-background-saves", action="store_true",
+        help="Measure request routing/retrieval without executing background save jobs; recommended for repeat benchmarks",
     )
     parser.add_argument(
         "--quiet-logs", action="store_true",
@@ -115,7 +148,7 @@ def main() -> None:
     for name in names:
         query = SCENARIOS[name]
         report["scenarios"][name] = run_scenario(
-            args.user_id, query, args.runs, args.cold_cache
+            args.user_id, query, args.runs, args.cold_cache, args.no_background_saves
         )
     print(json.dumps(report, indent=2))
 
