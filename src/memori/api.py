@@ -884,9 +884,9 @@ def _is_low_value_chat_turn(message: str) -> bool:
 
 
 _PAST_TASK_QUESTION_RE = re.compile(
-    r"\b(?:what|which|where|when|how)\b.{0,100}\b(?:last time|previously|before|earlier|previous|last)\b"
-    r".{0,100}\b(?:ask(?:ed)?|request(?:ed)?|tell|website|web\s?site|site|task|project|build|create|make|design|develop)\b|"
-    r"\bwhat\b.{0,70}\b(?:website|web\s?site|site|task|project)\b.{0,70}\b(?:did i ask|i asked|last time|previously|before|earlier)\b",
+    r"(?=.*\b(?:last time|previously|before|earlier|previous|last)\b)"
+    r"(?=.*\b(?:website|web\s?site|site|task|project|request)\b)"
+    r"(?=.*\b(?:ask(?:ed)?|request(?:ed)?|work(?:ed)? on|create|build|make|design|develop)\b)",
     re.IGNORECASE,
 )
 
@@ -894,7 +894,7 @@ _PAST_TASK_QUESTION_RE = re.compile(
 def _requires_past_task_lookup(message: str) -> bool:
     """Recognize retrospective questions about prior requests or completed tasks."""
     text = message.strip()
-    if not _looks_like_question(text):
+    if not _looks_like_question(text) or _requires_historical_project_lookup(text):
         return False
     return bool(_PAST_TASK_QUESTION_RE.search(text))
 
