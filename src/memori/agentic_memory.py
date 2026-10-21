@@ -104,6 +104,10 @@ def ensure_agent_memory_indexes() -> None:
             [("user_id", ASCENDING), ("status", ASCENDING), ("updated_at", DESCENDING)],
             name="agent_task_user_status_updated",
         )
+        tasks.create_index(
+            [("user_id", ASCENDING), ("created_at", DESCENDING)],
+            name="agent_task_user_created",
+        )
         _indexes_ready = True
 
 
@@ -343,7 +347,24 @@ def search_agent_tasks(user_id: str, query: str, limit: int = 50) -> list[dict[s
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
         raise ValueError("limit must be an integer between 1 and 100.")
 
-    tasks = list_agent_tasks(user_id, limit=500)
+    # Historical ranking needs only compact text fields. Avoid transferring
+    # potentially large tool_history/completed_steps payloads for every task.
+    tasks = list_agent_tasks(
+        user_id,
+        limit=500,
+        projection={
+            "_id": 0,
+            "user_id": 1,
+            "task_id": 1,
+            "goal": 1,
+            "status": 1,
+            "created_at": 1,
+            "result_summary": 1,
+            "context.last_user_request": 1,
+            "context.created_from": 1,
+        },
+        sort_by_created=True,
+    )
     tokens = [
         token.casefold()
         for token in re.findall(r"[a-zA-Z0-9_-]+", query)
@@ -441,18 +462,27 @@ def search_agent_tasks(user_id: str, query: str, limit: int = 50) -> list[dict[s
     return [item for _, _, item in scored[:limit]]
 
 
-def list_agent_tasks(user_id: str, limit: int = 100) -> list[dict[str, Any]]:
-    """List recent tasks of every status for a user, newest activity first.
+def list_agent_tasks(
+    user_id: str,
+    limit: int = 100,
+    *,
+    projection: Mapping[str, int] | None = None,
+    sort_by_created: bool = False,
+) -> list[dict[str, Any]]:
+    """List tasks for one user, including completed/failed tasks.
 
-    Unlike list_resumable_agent_tasks(), this includes completed and failed
-    tasks so historical questions can refer to work that is already finished.
+    Optional projection and creation-time sorting support compact historical
+    search without transferring potentially large tool and step histories.
     """
     user_id = _required_text(user_id, "user_id")
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
         raise ValueError("limit must be an integer between 1 and 500.")
+    if projection is not None and not isinstance(projection, Mapping):
+        raise TypeError("projection must be a mapping or None.")
     _, tasks = _collections()
-    return list(
-        tasks.find({"user_id": user_id}, {"_id": 0})
-        .sort([("updated_at", DESCENDING), ("created_at", DESCENDING)])
-        .limit(limit)
-    )
+    cursor = tasks.find({"user_id": user_id}, projection or {"_id": 0})
+    if sort_by_created:
+        cursor = cursor.sort([("created_at", DESCENDING), ("task_id", DESCENDING)])
+    else:
+        cursor = cursor.sort([("updated_at", DESCENDING), ("created_at", DESCENDING)])
+    return list(cursor.limit(limit))
