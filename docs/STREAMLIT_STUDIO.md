@@ -55,16 +55,26 @@ The background memory saver may not finish before the next message. If a just-st
 
 ## Production mode and remaining limitations
 
-By default this remains a local developer/test console. A **single-tenant private deployment** can enable the built-in fail-closed password gate:
+By default this is a local development/test console. Setting `MEMORI_ENV=production`
+switches the app to Streamlit's OIDC login flow. The app derives the tenant key from
+the verified identity provider issuer and subject; it does not accept a browser
+selected user ID in production mode.
 
-```powershell
-$env:MEMORI_ENV = "production"
-$env:STREAMLIT_ACCESS_PASSWORD = "<strong unique password from your secret manager>"
-$env:STREAMLIT_PRODUCTION_USER_ID = "<fixed tenant ID>"
-uv run streamlit run streamlit_app.py --server.address 127.0.0.1
-```
+Before enabling production mode:
 
-Set these values in your deployment's secret/configuration manager, not in committed files. Production mode refuses to start the UI unless both variables are configured, requires the password before displaying the app, and locks the tenant ID so the browser cannot switch users. Use HTTPS through a trusted reverse proxy when accessing it remotely. This is a shared-password, single-tenant gate—not enterprise identity, per-user authorization, or a substitute for network controls. For multiple users, put the app behind an identity-aware gateway and integrate a verified identity-to-tenant mapping; do not expose a user-editable tenant selector as authorization.
+1. Configure Streamlit's `[auth]` settings and your identity provider using the
+   current Streamlit OIDC deployment documentation. Set the redirect URI to the
+   public HTTPS URL for this deployment.
+2. Set `MEMORI_ENV=production` in the deployment environment.
+3. Configure all required service credentials using the deployment secret manager.
+4. Deploy behind HTTPS and test sign-in, sign-out, session expiry, and tenant
+   isolation using two separate test identities.
+
+Do not use the old `STREAMLIT_ACCESS_PASSWORD` or
+`STREAMLIT_PRODUCTION_USER_ID` variables as a production authentication mechanism:
+the current application code uses OIDC, not the former shared-password gate.
+The OIDC subject/issuer mapping is an application tenant key; verify that your
+identity provider's claims and account lifecycle meet your access-control policy.
 
 Before deployment:
 - Use TLS, secret management, network restrictions, least-privilege database credentials, and secure deployment configuration.
