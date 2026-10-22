@@ -278,3 +278,15 @@ def test_production_config_does_not_commit_environment_secrets():
     assert ".env.*" in gitignore
     assert "!.env.example" in gitignore
     assert "dist/" in gitignore and "build/" in gitignore
+
+
+def test_production_mode_requires_public_https_url():
+    """Fail the deployment acceptance check if production is configured with HTTP."""
+    from urllib.parse import urlparse
+
+    if os.getenv("MEMORI_ENV", "development").strip().lower() != "production":
+        pytest.skip("HTTPS enforcement applies to production deployment jobs.")
+    public_url = os.getenv("MEMORI_PUBLIC_URL", "").strip()
+    assert public_url, "Set MEMORI_PUBLIC_URL to the public deployment URL."
+    parsed = urlparse(public_url)
+    assert parsed.scheme == "https" and parsed.netloc, "Production public URL must use HTTPS."
