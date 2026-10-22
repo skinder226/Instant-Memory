@@ -46,3 +46,6 @@ jobs:
 
       - name: Run test suite
         run: uv run pytest -q
+
+      - name: Build distributable package
+        run: uv build
