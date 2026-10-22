@@ -181,7 +181,21 @@ def test_live_agent_events_and_tasks_are_tenant_isolated():
     run_id = uuid.uuid4().hex
     tenant_a, tenant_b = f"tenant-a-{run_id}", f"tenant-b-{run_id}"
     session_id, task_id, event_id = f"session-{run_id}", f"task-{run_id}", f"event-{run_id}"
+    memory_content = f"private memory sentinel {run_id}"
+    memory_ids: list[str] = []
+    api._USER_MEMORY_CACHE.clear()
     try:
+        created = api._save_memories_and_outbox(db, [_memory(memory_content)], tenant_a)
+        memory_ids = [item[1] for item in created]
+        assert any(
+            item.get("content") == memory_content
+            for item in api._get_current_user_memories(tenant_a)
+        )
+        assert all(
+            item.get("content") != memory_content
+            for item in api._get_current_user_memories(tenant_b)
+        )
+
         record_agent_event(
             tenant_a, session_id, "turn-1", "user",
             content=f"private sentinel {run_id}", event_id=event_id,
@@ -202,6 +216,13 @@ def test_live_agent_events_and_tasks_are_tenant_isolated():
     finally:
         db.agent_events.delete_many({"user_id": tenant_a, "event_id": event_id})
         db.agent_tasks.delete_many({"user_id": tenant_a, "task_id": task_id})
+        if memory_ids:
+            from bson import ObjectId
+            db.outbox.delete_many({"user_id": tenant_a, "mongo_id": {"$in": memory_ids}})
+            db.memories.delete_many({
+                "user_id": tenant_a, "_id": {"$in": [ObjectId(value) for value in memory_ids]},
+            })
+        api._USER_MEMORY_CACHE.clear()
 
 
 @pytest.mark.live
