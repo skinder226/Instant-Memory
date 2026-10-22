@@ -73,6 +73,19 @@ the synthetic retrieval tests do not prove distributed consistency.
 
 ## 3. Tenant isolation and authentication
 
+### Production Streamlit authorization configuration
+
+Set these values in the deployment's secret/configuration manager (not in committed files):
+
+- `MEMORI_ENV=production`
+- `MEMORI_PUBLIC_URL=https://your-real-hostname.example`
+- `MEMORI_OIDC_ALLOWED_EMAILS=admin@your-company.example,operator@your-company.example`
+  **or** `MEMORI_OIDC_ALLOWED_EMAIL_DOMAINS=your-company.example`
+- Configure Streamlit `[auth]` OIDC client ID, client secret, redirect URI, and issuer using the host's secret store or `.streamlit/secrets.toml` managed outside version control.
+
+Prefer exact email allowlists for small deployments. Domain allowlists grant access to every verified account in that domain; use them only for a controlled organization domain. The application fails closed if the HTTPS URL, allowlist, issuer, subject, verified email, or authorization check is missing/invalid. Keep the OIDC client secret in the host's secret store and rotate it if exposed. Validate the external TLS certificate and redirect/callback URL from a separate machine after deployment; `MEMORI_PUBLIC_URL` is a configuration gate, not proof of a live TLS handshake.
+
+
 - Authenticate every API request in the hosting service and derive tenant identity
   from a verified JWT/session principal. Never trust `user_id` from request JSON
   as the authorization decision.
@@ -125,6 +138,18 @@ the synthetic retrieval tests do not prove distributed consistency.
 - Alert on elevated p95 latency, retrieval misses in evaluation, provider errors,
   outbox age/queue growth, dead-letter events, database connection failures, and
   backup failures.
+
+## Deployment sign-off runbook
+
+These checks require access to the actual hosting provider and production-like infrastructure; a repository commit cannot perform them on your behalf.
+
+1. **Identity and access:** configure OIDC and the explicit email/domain allowlist above. Test an allowed user, a signed-in but unlisted user, an unverified email, logout, session expiry, and attempts to alter the tenant in browser state. The unlisted user must be denied before workspace data is queried.
+2. **HTTPS:** verify the real deployed URL from outside the network, certificate chain, HTTP-to-HTTPS redirect, secure cookies, and OIDC callback URL. Do not mark this complete based only on the environment variable.
+3. **Secrets:** use host-managed secrets, least-privilege database credentials, and separate staging/production projects. Scan repository history and deployment logs for accidental credentials; rotate any exposed credentials.
+4. **Crash/replay:** run `uv run pytest tests/test_production_acceptance.py -m live -v` against disposable staging services. The restart test checks outbox durability from a separate Python process and then replays it with a fresh worker invocation. For an operational drill, terminate the deployed worker after an event is persisted but before sync finishes, restart it, and verify both provider statuses reach `completed`.
+5. **Load:** increase `MEMORI_LIVE_LOAD_ITEMS` only after provider quotas and disposable-service cleanup are confirmed. Run a separately monitored load test representative of expected peak traffic and record p50/p95/p99 latency, throughput, error rate, provider rate limits/cost, and outbox oldest-event age. Eight writes in the smoke test are not a capacity target.
+6. **Backup/restore:** enable encrypted managed MongoDB backups, document retention and RPO/RTO, restore to an isolated database, and rebuild/test Pinecone and Neo4j projections from authoritative MongoDB memories/outbox before sign-off.
+7. **Operations:** add hosting-level liveness/readiness, error tracking, structured redacted logs, and alerts for MongoDB connectivity, provider failures, outbox age/dead-letter growth, latency, and backup failures.
 
 ## Release gate
 
