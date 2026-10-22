@@ -41,13 +41,16 @@ def _requires_historical_project_lookup(message: str) -> bool:
 
 def _retrieve_project_memories_fast(user_id: str, include_history: bool = False, query: str = "") -> list[str]:
     """Retrieve relevant project facts, including the predecessor of a named current project."""
-    from .mongodb_connection import db
-
-    collection = db["memories"]
-    projection = {"content": 1, "type": 1, "temporal": 1, "entities": 1, "id": 1}
     started = time.perf_counter()
 
     if include_history:
+        # Ordinary current-project lookups use the shared snapshot and must
+        # not initialize MongoDB separately. Open the collection only when
+        # historical lookup actually requires direct database queries.
+        from .mongodb_connection import db
+
+        collection = db["memories"]
+        projection = {"content": 1, "type": 1, "temporal": 1, "entities": 1, "id": 1}
         # For questions such as "What was my project before Orion?", first
         # resolve Orion and follow its explicit outbox supersession link.
         before_match = re.search(r"\bbefore\s+([A-Z][\w.-]*)\b", query, re.IGNORECASE)
