@@ -301,6 +301,52 @@ def test_live_concurrent_memory_writes_finish_and_persist():
                 pass
 
 
+def test_oidc_authorization_requires_verified_identity_and_explicit_allowlist():
+    from memori.production_auth import authorize_oidc_claims
+
+    claims = {
+        "sub": "subject-123",
+        "iss": "https://identity.example",
+        "email": "person@example.com",
+        "email_verified": True,
+    }
+    tenant = authorize_oidc_claims(
+        claims, allowed_emails="person@example.com", allowed_domains=""
+    )
+    assert tenant.startswith("oidc_")
+    assert tenant == authorize_oidc_claims(
+        claims, allowed_emails="person@example.com", allowed_domains=""
+    )
+    with pytest.raises(PermissionError):
+        authorize_oidc_claims(
+            claims, allowed_emails="", allowed_domains="other.example"
+        )
+    with pytest.raises(PermissionError):
+        authorize_oidc_claims(
+            {**claims, "email_verified": False},
+            allowed_emails="person@example.com",
+            allowed_domains="",
+        )
+    with pytest.raises(PermissionError):
+        authorize_oidc_claims(
+            claims, allowed_emails="", allowed_domains=""
+        )
+
+
+def test_public_url_validation_requires_https_without_embedded_credentials():
+    from memori.production_auth import validate_public_https_url
+
+    assert validate_public_https_url("https://memory.example.com") == "https://memory.example.com"
+    for invalid in (
+        "http://memory.example.com",
+        "https:///missing-host",
+        "https://user:password@memory.example.com",
+        "",
+    ):
+        with pytest.raises(ValueError):
+            validate_public_https_url(invalid)
+
+
 def test_production_identity_adapter_rejects_client_supplied_blank_identity(monkeypatch):
     monkeypatch.setattr(security, "memori", lambda **kwargs: {"ok": True})
     with pytest.raises(ValueError):
