@@ -235,6 +235,11 @@ def test_live_concurrent_memory_writes_finish_and_persist():
         assert len(events) == count
         assert all(e.get("pinecone", {}).get("status") == "completed" for e in events)
         assert all(e.get("neo4j", {}).get("status") == "completed" for e in events)
+        max_seconds = float(os.getenv("MEMORI_LIVE_LOAD_MAX_SECONDS", "180"))
+        assert elapsed <= max_seconds, (
+            f"Concurrent persistence took {elapsed:.2f}s, exceeding "
+            f"MEMORI_LIVE_LOAD_MAX_SECONDS={max_seconds:.2f}s"
+        )
         print(f"Concurrent persistence: {count} items in {elapsed:.2f}s "
               f"({count / max(elapsed, 0.001):.2f} items/s)")
     finally:
