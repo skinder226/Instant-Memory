@@ -138,12 +138,18 @@ def test_live_pending_outbox_is_replayed_after_worker_restart():
         created = api._save_memories_and_outbox(db, [_memory(content)], user_id)
         assert created
         _, mongo_id = created[0]
+        # Simulate a process exiting after transient provider errors were recorded.
+        db.outbox.update_one(
+            {"user_id": user_id, "mongo_id": mongo_id},
+            {"$set": {"pinecone.status": "error", "neo4j.status": "error"},
+             "$inc": {"pinecone.attempts": 1, "neo4j.attempts": 1}},
+        )
         event = db.outbox.find_one({"user_id": user_id, "mongo_id": mongo_id})
-        assert event and event["pinecone"]["status"] == "pending"
-        assert event["neo4j"]["status"] == "pending"
+        assert event and event["pinecone"]["status"] == "error"
+        assert event["neo4j"]["status"] == "error"
 
-        # Simulate application/worker restart: do not reuse a previously queued
-        # Future. A new invocation discovers durable work from MongoDB's outbox.
+        # Simulate application/worker restart: a fresh invocation discovers
+        # durable failed work from MongoDB's outbox.
         save_pending_memory(user_id).result(timeout=180)
         replayed = db.outbox.find_one({"user_id": user_id, "mongo_id": mongo_id})
         assert replayed["pinecone"]["status"] == "completed", replayed.get("pinecone")
