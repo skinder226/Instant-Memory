@@ -44,19 +44,56 @@ class _MongoTimingListener(monitoring.CommandListener):
                 event.failure,
             )
 
-connection_string = os.getenv("mongodb_URI")
-# PyMongo connects lazily; the first command includes initial connection/setup delay.
+connection_string = os.getenv("mongodb_URI") or os.getenv("MONGODB_URI")
+# PyMongo's MongoClient(None) silently targets localhost. Use a lazy proxy that
+# fails with a clear configuration error on first DB use instead of falling back.
 _mongo_timing_listener = _MongoTimingListener()
-client = MongoClient(
-    connection_string,
-    event_listeners=[_mongo_timing_listener],
-    serverSelectionTimeoutMS=int(os.getenv("MONGODB_SERVER_SELECTION_TIMEOUT_MS", "5000")),
-    connectTimeoutMS=int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", "5000")),
-    socketTimeoutMS=int(os.getenv("MONGODB_SOCKET_TIMEOUT_MS", "15000")),
-)
+_client = None
+_client_lock = threading.Lock()
 
-# Select/Create database
-db = client["memories"]
+
+def _get_client():
+    global _client, connection_string
+    if _client is not None:
+        return _client
+    with _client_lock:
+        if _client is not None:
+            return _client
+        uri = connection_string or os.getenv("mongodb_URI") or os.getenv("MONGODB_URI")
+        if not uri:
+            raise RuntimeError(
+                "MongoDB URI is missing. Set mongodb_URI or MONGODB_URI before database operations."
+            )
+        connection_string = uri
+        _client = MongoClient(
+            uri,
+            event_listeners=[_mongo_timing_listener],
+            serverSelectionTimeoutMS=int(os.getenv("MONGODB_SERVER_SELECTION_TIMEOUT_MS", "5000")),
+            connectTimeoutMS=int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", "5000")),
+            socketTimeoutMS=int(os.getenv("MONGODB_SOCKET_TIMEOUT_MS", "15000")),
+        )
+        return _client
+
+
+class _LazyMongoClient:
+    def __getattr__(self, name):
+        return getattr(_get_client(), name)
+
+    def __getitem__(self, name):
+        return _get_client()[name]
+
+
+class _LazyMongoDatabase:
+    def __getattr__(self, name):
+        return getattr(_get_client()["memories"], name)
+
+    def __getitem__(self, name):
+        return _get_client()["memories"][name]
+
+
+# Public proxies preserve the existing client.admin/db["collection"]/db.collection API.
+client = _LazyMongoClient()
+db = _LazyMongoDatabase()
 
 # Lazily create indexes on first real database operation. Indexes are ensured
 # per collection so a simple retrieval existence-check does not create dozens
