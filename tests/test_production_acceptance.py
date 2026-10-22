@@ -165,6 +165,17 @@ def test_live_pending_outbox_is_replayed_after_worker_restart():
         if mongo_id:
             db.outbox.delete_many({"user_id": user_id, "mongo_id": mongo_id})
             db.memories.delete_many({"user_id": user_id, "_id": ObjectId(mongo_id)})
+            try:
+                from memori.vector_str import index
+                from memori.Neo4j_connect import Neo4jGraph
+                index.delete(ids=[mongo_id], namespace=user_id)
+                Neo4jGraph.query(
+                    "MATCH (n {user_id: $user_id})-[r {user_id: $user_id}]->(t {user_id: $user_id}) "
+                    "WHERE $mongo_id IN coalesce(r.memory_ids, []) DELETE r",
+                    params={"user_id": user_id, "mongo_id": mongo_id},
+                )
+            except Exception:
+                pass
 
 
 @pytest.mark.live
