@@ -61,3 +61,48 @@ def test_retry_does_not_sleep_past_worker_budget(monkeypatch):
     with pytest.raises(APIStatusError):
         worker.invoke_with_retry(Runnable(), [])
     assert waits == []
+
+
+def test_pinecone_batch_rejects_missing_embedding_vectors(monkeypatch):
+    """Never mark a memory synchronized when the embedding batch is incomplete."""
+    errors = []
+    completed = []
+    upserts = []
+
+    class FakeEmbeddings:
+        def embed_documents(self, contents):
+            return []  # Provider bug: one input, zero vectors.
+
+    class FakeIndex:
+        def upsert(self, **kwargs):
+            upserts.append(kwargs)
+
+    monkeypatch.setattr(worker, "embeddings", FakeEmbeddings())
+    monkeypatch.setattr(worker, "index", FakeIndex())
+    monkeypatch.setattr(
+        worker, "set_memory_error_or_attempts",
+        lambda user_id, mongo_id, provider, error: errors.append(
+            (user_id, str(mongo_id), provider, str(error))
+        ),
+    )
+    monkeypatch.setattr(
+        worker, "set_memory_status",
+        lambda user_id, mongo_id, provider, status: completed.append(
+            (user_id, str(mongo_id), provider, status)
+        ),
+    )
+
+    memory = {
+        "_id": "memory-1",
+        "user_id": "test-user",
+        "type": "profile",
+        "content": "The user works at Example Corp.",
+        "temporal": {"is_current": True},
+    }
+    worker._process_pinecone("test-user", [(memory, [])])
+
+    assert len(errors) == 1
+    assert errors[0][0:3] == ("test-user", "memory-1", "pinecone")
+    assert "0 vectors for 1 memories" in errors[0][3]
+    assert not completed
+    assert not upserts
