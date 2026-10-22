@@ -42,13 +42,19 @@ def _live_services():
 
 
 def _memory(content: str) -> dict:
+    token = uuid.uuid4().hex
     return {
         "type": "profile",
         "content": content,
         "confidence": 1.0,
         "importance": 0.5,
         "source_role": "user",
-        "entities": [],
+        "entities": [{
+            "source": {"name": "AcceptanceSource-" + token, "type": ["Person"]},
+            "target": {"name": "AcceptanceTarget-" + token, "type": ["Project"]},
+            "relationship": "knows",
+            "properties": {},
+        }],
         "temporal": {"is_current": True},
     }
 
@@ -94,12 +100,13 @@ def test_live_memory_sync_mongodb_pinecone_and_neo4j():
         # The graph writer's success status is supplemented by a read-after-write
         # check against the configured Neo4j database. All graph writes are tenant-tagged.
         result = neo4j_graph.query(
-            "MATCH (n) WHERE n.user_id = $user_id AND n.mongo_id = $mongo_id "
-            "RETURN count(n) AS node_count",
+            "MATCH (n {user_id: $user_id})-[r {user_id: $user_id}]->(t {user_id: $user_id}) "
+            "WHERE $mongo_id IN coalesce(r.memory_ids, []) "
+            "RETURN count(r) AS relationship_count",
             params={"user_id": user_id, "mongo_id": mongo_id},
         )
-        assert result and result[0]["node_count"] >= 1, (
-            "Neo4j did not expose a node for this tenant/memory after successful sync"
+        assert result and result[0]["relationship_count"] >= 1, (
+            "Neo4j did not expose the synchronized relationship after successful sync"
         )
     finally:
         # Cleanup is tenant-scoped and uses this test's unique IDs only.
@@ -115,8 +122,8 @@ def test_live_memory_sync_mongodb_pinecone_and_neo4j():
                 pass
             try:
                 neo4j_graph.query(
-                    "MATCH (n) WHERE n.user_id = $user_id AND n.mongo_id = $mongo_id "
-                    "DETACH DELETE n",
+                    "MATCH (n {user_id: $user_id})-[r {user_id: $user_id}]->(t {user_id: $user_id}) "
+                    "WHERE $mongo_id IN coalesce(r.memory_ids, []) DELETE r",
                     params={"user_id": user_id, "mongo_id": mongo_ids[0]},
                 )
             except Exception:
@@ -248,6 +255,18 @@ def test_live_concurrent_memory_writes_finish_and_persist():
             db.memories.delete_many({
                 "user_id": user_id, "_id": {"$in": [ObjectId(value) for value in created_ids]},
             })
+            try:
+                from memori.vector_str import index
+                from memori.Neo4j_connect import Neo4jGraph
+                index.delete(ids=created_ids, namespace=user_id)
+                Neo4jGraph.query(
+                    "MATCH (n {user_id: $user_id})-[r {user_id: $user_id}]->(t {user_id: $user_id}) "
+                    "WHERE any(memory_id IN $memory_ids WHERE memory_id IN coalesce(r.memory_ids, [])) "
+                    "DELETE r",
+                    params={"user_id": user_id, "memory_ids": created_ids},
+                )
+            except Exception:
+                pass
 
 
 def test_production_identity_adapter_rejects_client_supplied_blank_identity(monkeypatch):
