@@ -25,6 +25,34 @@ grounding separately. Add explicit negative questions for facts that do not
 exist, expired facts, and conflicting old/current facts. Never use real personal
 memory dumps in CI.
 
+## Live acceptance tests
+
+The fast test suite uses mocks and must not be treated as proof of provider connectivity.
+Opt-in live acceptance tests exercise MongoDB, Pinecone, Neo4j, durable outbox replay,
+tenant-scoped agent history/task reads, and concurrent persistence:
+
+```powershell
+# Use a disposable staging environment, never production user data.
+$env:MEMORI_RUN_LIVE_TESTS = "1"
+$env:MEMORI_LIVE_TEST_USER_PREFIX = "staging-acceptance"
+$env:MEMORI_LIVE_LOAD_ITEMS = "8"
+$env:MEMORI_LIVE_LOAD_MAX_SECONDS = "180"
+uv run pytest tests/test_production_acceptance.py -m live -v
+Remove-Item Env:MEMORI_RUN_LIVE_TESTS
+```
+
+Configure the same provider credentials used by the staging application:
+`mongodb_URI`, `PINECONE_API_KEY`, `NEO4J_URI`, `NEO4J_USERNAME`,
+`NEO4J_PASSWORD`, and `GEMINI_API_KEY`. Tests generate unique tenant and record IDs,
+and remove only records tagged with those IDs. A failed cleanup may leave test records
+in the disposable environment, so inspect the test tenant before reusing it.
+
+The load test defaults to eight concurrent source-memory writes and checks that the
+write-plus-sync run completes within 180 seconds. This is a smoke threshold, not a
+capacity SLO; set an agreed p95/p99 target and run a larger, separately monitored load
+test before production. The HTTPS test is a deployment gate when
+`MEMORI_ENV=production`: set `MEMORI_PUBLIC_URL` to the externally reachable HTTPS URL.
+
 ## 2. Source of truth and consistency
 
 - MongoDB is authoritative. Treat Pinecone and Neo4j as rebuildable projections.
