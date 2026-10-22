@@ -23,9 +23,6 @@ from memori import api
 
 
 LIVE = os.getenv("MEMORI_RUN_LIVE_TESTS", "").strip().lower() in {"1", "true", "yes"}
-pytestmark = pytest.mark.live
-
-
 def _live_services():
     if not LIVE:
         pytest.skip("Set MEMORI_RUN_LIVE_TESTS=1 to enable live-service acceptance tests.")
@@ -56,18 +53,19 @@ def _memory(content: str) -> dict:
     }
 
 
+@pytest.mark.live
 def test_live_memory_sync_mongodb_pinecone_and_neo4j():
     """A real Mongo memory must reach both projections before outbox is completed."""
     db = _live_services()
     from memori.worker import save_pending_memory
     from memori.vector_str import index
-    from memori.Neo4j_connect import driver
+    from memori.Neo4j_connect import Neo4jGraph
 
     run_id = uuid.uuid4().hex
     user_id = f"{os.getenv('MEMORI_LIVE_TEST_USER_PREFIX', 'acceptance')}-{run_id}"
     content = f"Production acceptance sentinel {run_id}"
     mongo_ids: list[str] = []
-    neo4j_driver = driver
+    neo4j_graph = Neo4jGraph
 
     try:
         created = api._save_memories_and_outbox(db, [_memory(content)], user_id)
@@ -95,14 +93,12 @@ def test_live_memory_sync_mongodb_pinecone_and_neo4j():
 
         # The graph writer's success status is supplemented by a read-after-write
         # check against the configured Neo4j database. All graph writes are tenant-tagged.
-        with neo4j_driver.session() as session:
-            result = session.run(
-                "MATCH (n) WHERE n.user_id = $user_id AND n.mongo_id = $mongo_id "
-                "RETURN count(n) AS node_count",
-                user_id=user_id,
-                mongo_id=mongo_id,
-            ).single()
-        assert result is not None and result["node_count"] >= 1, (
+        result = neo4j_graph.query(
+            "MATCH (n) WHERE n.user_id = $user_id AND n.mongo_id = $mongo_id "
+            "RETURN count(n) AS node_count",
+            params={"user_id": user_id, "mongo_id": mongo_id},
+        )
+        assert result and result[0]["node_count"] >= 1, (
             "Neo4j did not expose a node for this tenant/memory after successful sync"
         )
     finally:
@@ -117,14 +113,17 @@ def test_live_memory_sync_mongodb_pinecone_and_neo4j():
                 index.delete(ids=mongo_ids, namespace=user_id)
             except Exception:
                 pass
-            with neo4j_driver.session() as session:
-                session.run(
-                    "MATCH (n {user_id: $user_id, mongo_id: $mongo_id}) DETACH DELETE n",
-                    user_id=user_id,
-                    mongo_id=mongo_ids[0],
+            try:
+                neo4j_graph.query(
+                    "MATCH (n) WHERE n.user_id = $user_id AND n.mongo_id = $mongo_id "
+                    "DETACH DELETE n",
+                    params={"user_id": user_id, "mongo_id": mongo_ids[0]},
                 )
+            except Exception:
+                pass
 
 
+@pytest.mark.live
 def test_live_pending_outbox_is_replayed_after_worker_restart():
     """A pending outbox event must be recoverable by a fresh worker invocation."""
     db = _live_services()
@@ -155,6 +154,7 @@ def test_live_pending_outbox_is_replayed_after_worker_restart():
             db.memories.delete_many({"user_id": user_id, "_id": ObjectId(mongo_id)})
 
 
+@pytest.mark.live
 def test_live_agent_events_and_tasks_are_tenant_isolated():
     """A second authenticated tenant must not retrieve another tenant's history."""
     db = _live_services()
@@ -191,6 +191,7 @@ def test_live_agent_events_and_tasks_are_tenant_isolated():
         db.agent_tasks.delete_many({"user_id": tenant_a, "task_id": task_id})
 
 
+@pytest.mark.live
 def test_live_concurrent_memory_writes_finish_and_persist():
     """Exercise concurrent Mongo/outbox writes and provider sync with unique records."""
     db = _live_services()
