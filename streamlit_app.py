@@ -36,6 +36,7 @@ from memori import (
     search_agent_events,
 )
 from memori.agentic_memory import search_agent_tasks
+from memori.production_auth import authorize_oidc_claims, validate_public_https_url
 
 load_dotenv()
 st.set_page_config(page_title="Instant-Memory Studio", page_icon="🧠", layout="wide")
@@ -49,25 +50,30 @@ AUTHENTICATED_USER_ID: str | None = None
 
 if PRODUCTION_MODE:
     try:
+        # Fail closed if the public deployment URL or authorization allowlist is
+        # missing. TLS termination itself must be configured at the hosting edge.
+        validate_public_https_url(os.getenv("MEMORI_PUBLIC_URL", ""))
+        if not os.getenv("MEMORI_OIDC_ALLOWED_EMAILS", "").strip() and not os.getenv("MEMORI_OIDC_ALLOWED_EMAIL_DOMAINS", "").strip():
+            raise PermissionError(
+                "Set MEMORI_OIDC_ALLOWED_EMAILS or MEMORI_OIDC_ALLOWED_EMAIL_DOMAINS."
+            )
+
         if not st.user.is_logged_in:
             st.title("Instant-Memory Studio")
             st.write("Sign in using your organization's identity provider.")
             st.login()
             st.stop()
 
-        # OIDC subject is the stable authenticated principal; combine it with
-        # issuer so subjects from different identity providers cannot collide.
-        claims = st.user
-        subject = str(claims.get("sub", "")).strip()
-        issuer = str(claims.get("iss", "")).strip()
-        if not subject or not issuer:
-            st.error("Verified OIDC identity is missing required issuer/subject claims.")
-            st.stop()
-        principal_digest = hashlib.sha256(f"{issuer}\\0{subject}".encode("utf-8")).hexdigest()
-        AUTHENTICATED_USER_ID = "oidc_" + principal_digest
+        # Streamlit verifies the OIDC login; this additional allowlist check
+        # authorizes the user for this application. Never trust a browser field.
+        AUTHENTICATED_USER_ID = authorize_oidc_claims(
+            st.user,
+            allowed_emails=os.getenv("MEMORI_OIDC_ALLOWED_EMAILS", ""),
+            allowed_domains=os.getenv("MEMORI_OIDC_ALLOWED_EMAIL_DOMAINS", ""),
+        )
         st.session_state["selected_user_id"] = AUTHENTICATED_USER_ID
     except Exception as exc:
-        st.error(f"Authentication configuration failed: {type(exc).__name__}. Check OIDC deployment secrets.")
+        st.error(f"Authentication/authorization configuration failed: {type(exc).__name__}. Check OIDC deployment settings.")
         st.stop()
 
 MAX_CHAT_CHARS = 12_000
