@@ -13,6 +13,8 @@ from __future__ import annotations
 import concurrent.futures
 import os
 import re
+import subprocess
+import sys
 import time
 import uuid
 
@@ -155,8 +157,23 @@ def test_live_pending_outbox_is_replayed_after_worker_restart():
         assert event and event["pinecone"]["status"] == "error"
         assert event["neo4j"]["status"] == "error"
 
-        # Simulate application/worker restart: a fresh invocation discovers
-        # durable failed work from MongoDB's outbox.
+        # Cross a real process boundary: a separate Python process starts,
+        # reconnects to MongoDB, and confirms the failed event survived process exit.
+        child_script = (
+            "import sys; from memori.mongodb_connection import db; "
+            "user_id, mongo_id = sys.argv[1:3]; "
+            "event = db.outbox.find_one({'user_id': user_id, 'mongo_id': mongo_id}); "
+            "assert event and event.get('pinecone', {}).get('status') == 'error'; "
+            "assert event and event.get('neo4j', {}).get('status') == 'error'; "
+            "print('durable failed outbox event survived process boundary')"
+        )
+        child = subprocess.run(
+            [sys.executable, "-c", child_script, user_id, mongo_id],
+            check=True, capture_output=True, text=True, timeout=45,
+        )
+        assert "survived process boundary" in child.stdout
+
+        # A newly invoked worker now replays durable failed work from MongoDB.
         save_pending_memory(user_id).result(timeout=180)
         replayed = db.outbox.find_one({"user_id": user_id, "mongo_id": mongo_id})
         assert replayed["pinecone"]["status"] == "completed", replayed.get("pinecone")
