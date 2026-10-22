@@ -142,9 +142,15 @@ def _process_pinecone(user_id, work_items):
             embedding_started = time.perf_counter()
             embedded = embeddings.embed_documents(contents)
             embedding_ms = (time.perf_counter() - embedding_started) * 1000
+            if len(embedded) != len(batch):
+                raise ValueError(
+                    "Embedding provider returned "
+                    f"{len(embedded)} vectors for {len(batch)} memories; "
+                    "refusing to mark an incomplete batch as synchronized."
+                )
             vectors = [
                 _pinecone_vector(memory, values)
-                for (memory, _), values in zip(batch, embedded)
+                for (memory, _), values in zip(batch, embedded, strict=True)
             ]
             upsert_started = time.perf_counter()
             index.upsert(vectors=vectors, namespace=user_id)
