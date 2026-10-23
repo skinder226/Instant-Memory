@@ -87,6 +87,6 @@ if mem_llm_provider in openai_compatible_providers:
 # RelationshipProperties (extra="allow" for free-form relationship properties)
 # and caused: "invalid JSON schema for response_format: 'MemorySchema'".
 query_converter = router_chat.with_structured_output(RetivalTypes, method="json_mode")
-memory_extractor = chat.with_structured_output(MemorySchema, method="json_mode")
+memory_extractor = chat.with_structured_output(MemorySchema, method="function_calling")
 RetrievalRouter = router_chat.with_structured_output(RetrievalPlan, method="json_mode")
 MemoryDecisionGate = router_chat.with_structured_output(MemoryDecision, method="json_mode")
