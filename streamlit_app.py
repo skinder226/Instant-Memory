@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from pymongo import MongoClient, DESCENDING
 from langchain.agents import create_agent
@@ -108,6 +109,32 @@ def redact_secrets(value: Any) -> Any:
         return json.loads(text)
     except Exception:
         return text
+
+
+
+def extract_html_document(answer: str) -> str | None:
+    """Return a complete HTML document from raw HTML or a fenced HTML block."""
+    if not isinstance(answer, str):
+        return None
+    text = answer.strip()
+    fenced = re.search(r"```(?:html|htm)\s*\n(.*?)\n```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    has_html = re.search(r"<html\b", text, flags=re.IGNORECASE) and re.search(r"</html\s*>", text, flags=re.IGNORECASE)
+    has_fragment = re.search(r"<!doctype\s+html|<body\b", text, flags=re.IGNORECASE) and re.search(r"</(?:body|html)\s*>", text, flags=re.IGNORECASE)
+    return text if has_html or has_fragment else None
+
+
+def render_agent_answer(answer_area, answer: str) -> None:
+    """Render generated HTML as a sandboxed preview with source available."""
+    html_document = extract_html_document(answer)
+    if html_document is None:
+        render_agent_answer(answer_area, answer)
+        return
+    answer_area.success("HTML website detected. Preview is sandboxed below.")
+    components.html(html_document, height=720, scrolling=True)
+    with st.expander("View generated HTML source"):
+        st.code(html_document[:MAX_DISPLAY_CHARS], language="html")
 
 
 def get_database(uri: str):
