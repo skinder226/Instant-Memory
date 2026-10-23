@@ -129,7 +129,7 @@ def render_agent_answer(answer_area, answer: str) -> None:
     """Render generated HTML as a sandboxed preview with source available."""
     html_document = extract_html_document(answer)
     if html_document is None:
-        render_agent_answer(answer_area, answer)
+        answer_area.markdown(answer)
         return
     answer_area.success("HTML website detected. Preview is sandboxed below.")
     components.html(html_document, height=720, scrolling=True)
