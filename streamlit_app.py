@@ -237,9 +237,14 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
             "original last_user_request and goal in your answer. Use list_resumable_tasks only for unfinished "
             "work. For multi-step tasks, call update_task_progress at meaningful milestones and "
             "preserve completed versus pending steps. Never claim an external action happened unless "
-            "an authorized tool actually performed it. The tools in this demo can update checkpoints "
-            "and search history only; they cannot send email, book services, deploy software, or edit "
-            "external systems. Ask before consequential actions if such tools are later connected."
+            "an authorized tool actually performed it. When asked to write, generate, recreate, or fix code, "
+            "include the actual requested code in the same answer; for a website, provide the complete runnable "
+            "HTML/CSS/JavaScript rather than saying it is done or was provided earlier. Never claim an artifact "
+            "was saved, attached, or delivered unless it is actually included or a tool created it. If length is "
+            "a concern, split the code into clearly numbered consecutive parts instead of omitting it. "
+            "The tools in this demo can update checkpoints and search history only; they cannot send email, "
+            "book services, deploy software, or edit external systems. Ask before consequential actions if such "
+            "tools are later connected."
         ),
     )
     runtime = AgenticMemoryRuntime(
