@@ -448,10 +448,20 @@ with chat_tab:
                         answer_area = st.empty()
                         if runtime.streaming:
                             result = None
+                            pending_display = ""
+                            last_display_update = time.monotonic()
                             for stream_event in runtime.stream(user_message):
                                 if stream_event["type"] == "token":
-                                    answer += stream_event["content"]
-                                    answer_area.markdown(answer + "▌")
+                                    token = stream_event["content"]
+                                    answer += token
+                                    pending_display += token
+                                    # Batch UI redraws; one Streamlit render per token can
+                                    # overwhelm the frontend during large code responses.
+                                    now = time.monotonic()
+                                    if len(pending_display) >= 80 or now - last_display_update >= 0.12:
+                                        answer_area.markdown(answer + "▌")
+                                        pending_display = ""
+                                        last_display_update = now
                                 elif stream_event["type"] == "result":
                                     result = stream_event["result"]
                             if result is None:
