@@ -220,7 +220,7 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     if not api_key or not model_name:
         raise RuntimeError("Set NVIDIA_API_KEY and NVIDIA_MODEL in .env before starting chat.")
 
-    llm = ChatOpenAI(api_key=api_key, model=model_name, temperature=0,base_url="https://integrate.api.nvidia.com/v1")
+    llm = ChatOpenAI(api_key=api_key, model=model_name, temperature=0, streaming=True, base_url="https://integrate.api.nvidia.com/v1")
     agent = create_agent(
         model=llm,
         tools=[update_task_progress, search_past_events, search_past_tasks, list_resumable_tasks],
@@ -250,6 +250,7 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     runtime = AgenticMemoryRuntime(
         user_id=user_id, agent=agent, session_id=session_id, task_id=task_id,
         history_limit=20, memory_limit_chars=8000,
+        streaming=True,  # Enable token streaming here; no UI toggle is exposed.
     )
     holder["runtime"] = runtime
     return runtime
@@ -443,29 +444,44 @@ with chat_tab:
                         # Run the agent in a worker so this Streamlit script can poll
                         # MongoDB and display persisted tool/context events while it works.
                         turn_started = datetime.now(timezone.utc)
-                        future = _TURN_EXECUTOR.submit(runtime.run, user_message)
-                        live_trace = st.empty()
-                        while not future.done():
-                            live_events = list(db.agent_events.find(
-                                {"user_id": user_id, "session_id": runtime.session_id,
-                                 "created_at": {"$gte": turn_started}},
-                                {"_id": 0, "created_at": 1, "event_type": 1, "role": 1,
-                                 "content": 1, "tool_name": 1},
-                            ).sort("created_at", DESCENDING).limit(8))
-                            live_events.reverse()
-                            with live_trace.container(border=True):
-                                st.markdown("**Live trace — latest persisted events**")
-                                if not live_events:
-                                    st.caption("Waiting for retrieval and event logging…")
-                                for live_event in live_events:
-                                    st.markdown(f"- **{live_event.get('event_type')}** · "
-                                                f"{live_event.get('tool_name') or live_event.get('role', 'system')} — "
-                                                f"{str(redact_secrets(live_event.get('content', '')))[:220]}")
-                            time.sleep(0.7)
-                        result = future.result()
-                        answer = result.get("answer") or "(The agent returned an empty answer.)"
+                        answer = ""
+                        answer_area = st.empty()
+                        if runtime.streaming:
+                            result = None
+                            for stream_event in runtime.stream(user_message):
+                                if stream_event["type"] == "token":
+                                    answer += stream_event["content"]
+                                    answer_area.markdown(answer + "▌")
+                                elif stream_event["type"] == "result":
+                                    result = stream_event["result"]
+                            if result is None:
+                                raise RuntimeError("Agent stream ended without a final result.")
+                            answer = result.get("answer") or answer or "(The agent returned an empty answer.)"
+                            answer_area.markdown(answer)
+                        else:
+                            future = _TURN_EXECUTOR.submit(runtime.run, user_message)
+                            live_trace = st.empty()
+                            while not future.done():
+                                live_events = list(db.agent_events.find(
+                                    {"user_id": user_id, "session_id": runtime.session_id,
+                                     "created_at": {"$gte": turn_started}},
+                                    {"_id": 0, "created_at": 1, "event_type": 1, "role": 1,
+                                     "content": 1, "tool_name": 1},
+                                ).sort("created_at", DESCENDING).limit(8))
+                                live_events.reverse()
+                                with live_trace.container(border=True):
+                                    st.markdown("**Live trace — latest persisted events**")
+                                    if not live_events:
+                                        st.caption("Waiting for retrieval and event logging…")
+                                    for live_event in live_events:
+                                        st.markdown(f"- **{live_event.get('event_type')}** · "
+                                                    f"{live_event.get('tool_name') or live_event.get('role', 'system')} — "
+                                                    f"{str(redact_secrets(live_event.get('content', '')))[:220]}")
+                                time.sleep(0.7)
+                            result = future.result()
+                            answer = result.get("answer") or "(The agent returned an empty answer.)"
+                            answer_area.markdown(answer)
                         status.update(label="Agent turn completed", state="complete", expanded=False)
-                        st.markdown(answer)
                         if result.get("memory_retrieval_error"):
                             st.warning("Long-term memory retrieval failed: " + str(result["memory_retrieval_error"]))
                         st.caption(
