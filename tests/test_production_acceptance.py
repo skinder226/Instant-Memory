@@ -22,7 +22,10 @@ import pytest
 
 from memori import agentic_memory, security
 from memori import api
+from dotenv import load_dotenv
 
+
+load_dotenv()
 
 LIVE = os.getenv("MEMORI_RUN_LIVE_TESTS", "").strip().lower() in {"1", "true", "yes"}
 def _live_services():
@@ -39,6 +42,7 @@ def _live_services():
     missing = [name for name in required if not os.getenv(name)]
     if missing:
         pytest.fail("Live acceptance test missing required environment variables: " + ", ".join(missing))
+        print("Live acceptance test missing required environment variables: " + ", ".join(missing))
     from memori.mongodb_connection import db
     return db
 
