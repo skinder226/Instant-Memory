@@ -494,7 +494,7 @@ with chat_tab:
                             if result is None:
                                 raise RuntimeError("Agent stream ended without a final result.")
                             answer = result.get("answer") or answer or "(The agent returned an empty answer.)"
-                            answer_area.markdown(answer)
+                            render_agent_answer(answer_area, answer)
                         else:
                             future = _TURN_EXECUTOR.submit(runtime.run, user_message)
                             live_trace = st.empty()
@@ -517,7 +517,7 @@ with chat_tab:
                                 time.sleep(0.7)
                             result = future.result()
                             answer = result.get("answer") or "(The agent returned an empty answer.)"
-                            answer_area.markdown(answer)
+                            render_agent_answer(answer_area, answer)
                         status.update(label="Agent turn completed", state="complete", expanded=False)
                         if result.get("memory_retrieval_error"):
                             st.warning("Long-term memory retrieval failed: " + str(result["memory_retrieval_error"]))
