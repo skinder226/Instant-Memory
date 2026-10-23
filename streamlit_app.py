@@ -220,7 +220,7 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     if not api_key or not model_name:
         raise RuntimeError("Set NVIDIA_API_KEY and NVIDIA_MODEL in .env before starting chat.")
 
-    llm = ChatOpenAI(api_key=api_key, model=model_name, temperature=0, streaming=True, base_url="https://integrate.api.nvidia.com/v1")
+    llm = ChatOpenAI(api_key=api_key, model=model_name, temperature=0, streaming=True, timeout=float(os.getenv("MEMORI_AGENT_TIMEOUT_SECONDS", "180")), max_retries=2, base_url="https://integrate.api.nvidia.com/v1")
     agent = create_agent(
         model=llm,
         tools=[update_task_progress, search_past_events, search_past_tasks, list_resumable_tasks],
