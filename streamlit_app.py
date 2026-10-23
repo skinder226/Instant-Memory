@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient, DESCENDING
 from langchain.agents import create_agent
 from langchain.tools import tool
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 
 from memori import (
     AgenticMemoryRuntime,
@@ -215,12 +215,12 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
             for item in tasks
         ], 10_000)
 
-    api_key = os.getenv("Mem_llm_Api")
-    model_name = os.getenv("Mem_model")
+    api_key = os.getenv("NVIDIA_API_KEY")
+    model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
     if not api_key or not model_name:
-        raise RuntimeError("Set Mem_llm_Api and Mem_model in .env before starting chat.")
+        raise RuntimeError("Set NVIDIA_API_KEY and NVIDIA_MODEL in .env before starting chat.")
 
-    llm = ChatGroq(api_key=api_key, model=model_name, temperature=0)
+    llm = ChatOpenAI(api_key=api_key, model=model_name, temperature=0,base_url="https://integrate.api.nvidia.com/v1")
     agent = create_agent(
         model=llm,
         tools=[update_task_progress, search_past_events, search_past_tasks, list_resumable_tasks],
