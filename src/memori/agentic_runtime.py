@@ -366,7 +366,14 @@ class AgenticMemoryRuntime:
             "distinguish remembered facts from assumptions. For multi-step work use the "
             "task/checkpoint tools if provided and keep completed vs pending work. Never "
             "claim an external side effect succeeded unless an authorized tool confirmed it. "
-            "If memory retrieval failed, say so when it matters.\n\n"
+            "If memory retrieval failed, say so when it matters. "
+            "ARTIFACT DELIVERY RULE: When the user asks you to write, generate, recreate, or fix code, "
+            "return the actual complete code in your answer, in code fences or as a clearly labeled "
+            "file-by-file listing. Do not say the code is above, already delivered, saved, attached, "
+            "or complete unless the actual artifact is present in this same answer or a tool truly created it. "
+            "For a single-file website request, include the full runnable HTML/CSS/JavaScript, not a feature list. "
+            "If the response is too long, provide the artifact in clearly numbered consecutive parts and state "
+            "which part remains; never replace the code with a completion claim.\n\n"
             "CONTEXT (JSON):\n" + context_text
             + "\n\nCURRENT USER REQUEST:\n" + user_input
         )
