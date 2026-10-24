@@ -613,6 +613,10 @@ with chat_tab:
                                     st.markdown(before_content)
                             except (OSError, ValueError):
                                 before_content = None
+                        is_continue_only = bool(re.search(r"\\b(continue|complete|finish)\\b", user_message, re.IGNORECASE)) and not bool(
+                            re.search(r"\\b(change|edit|remove|delete|replace|rewrite)\\b", user_message, re.IGNORECASE)
+                        )
+                        stream_prefix = before_content if is_continue_only and before_content else ""
 
                         # Save large user-provided source material outside the prompt.
                         agent_message = user_message
@@ -639,7 +643,10 @@ with chat_tab:
                                     # overwhelm the frontend during large code responses.
                                     now = time.monotonic()
                                     if len(pending_display) >= 80 or now - last_display_update >= 0.12:
-                                        answer_area.markdown(answer + "▌")
+                                        visible_text = (
+                                            stream_prefix + "\\n\\n" + answer if stream_prefix else answer
+                                        )
+                                        answer_area.markdown(visible_text + "▌")
                                         pending_display = ""
                                         last_display_update = now
                                 elif stream_event["type"] == "result":
