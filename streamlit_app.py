@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import re
 import time
@@ -40,6 +41,21 @@ from memori.agentic_memory import search_agent_tasks
 from memori.production_auth import authorize_oidc_claims, validate_public_https_url
 
 load_dotenv()
+
+# Streamlit may already have configured the root logger. Configure a dedicated
+# logger explicitly so provider failures and full tracebacks are visible in the
+# terminal even when basicConfig() would otherwise be a no-op.
+logger = logging.getLogger("memori.studio")
+logger.setLevel(logging.INFO)
+if not any(getattr(handler, "_memori_studio_handler", False) for handler in logger.handlers):
+    _studio_handler = logging.StreamHandler()
+    _studio_handler._memori_studio_handler = True
+    _studio_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s [memori.studio] %(message)s"
+    ))
+    logger.addHandler(_studio_handler)
+logger.propagate = False
+
 st.set_page_config(page_title="Instant-Memory Studio", page_icon="🧠", layout="wide")
 
 # Production authentication uses Streamlit's OIDC integration. Configure
@@ -247,7 +263,21 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     if not api_key or not model_name:
         raise RuntimeError("Set NVIDIA_API_KEY and NVIDIA_MODEL in .env before starting chat.")
 
-    llm = ChatOpenAI(api_key=api_key, model=model_name, temperature=0, streaming=True, timeout=float(os.getenv("MEMORI_AGENT_TIMEOUT_SECONDS", "180")), max_retries=2, base_url="https://integrate.api.nvidia.com/v1")
+    agent_timeout = float(os.getenv("MEMORI_AGENT_TIMEOUT_SECONDS", "180"))
+    retry_count = max(0, int(os.getenv("MEMORI_AGENT_MAX_RETRIES", "2")))
+    logger.info(
+        "Agent provider configured model=%s timeout_seconds=%s max_retries=%s streaming=true",
+        model_name, agent_timeout, retry_count,
+    )
+    llm = ChatOpenAI(
+        api_key=api_key,
+        model=model_name,
+        temperature=0,
+        streaming=True,
+        timeout=agent_timeout,
+        max_retries=retry_count,
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
     agent = create_agent(
         model=llm,
         tools=[update_task_progress, search_past_events, search_past_tasks, list_resumable_tasks],
@@ -528,10 +558,37 @@ with chat_tab:
                         )
                         st.session_state.chat_messages.append({"role": "assistant", "content": answer})
                     except Exception as exc:
+                        elapsed = (datetime.now(timezone.utc) - turn_started).total_seconds() if "turn_started" in locals() else 0
+                        logger.exception(
+                            "Agent turn failed user_id=%s session_id=%s task_id=%s elapsed_seconds=%.2f "
+                            "partial_answer_chars=%d error_type=%s",
+                            user_id, runtime.session_id, runtime.task_id, elapsed,
+                            len(answer) if isinstance(answer, str) else 0, type(exc).__name__,
+                        )
                         status.update(label="Agent turn failed", state="error", expanded=True)
                         error = f"{type(exc).__name__}: {exc}"
-                        st.error(error)
-                        st.session_state.chat_messages.append({"role": "assistant", "content": "The turn failed: " + error})
+                        is_timeout = isinstance(exc, (TimeoutError,)) or "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
+                        is_gateway_error = any(marker in str(exc).lower() for marker in ("502", "503", "504", "gateway"))
+                        if is_timeout or is_gateway_error:
+                            st.error(
+                                "The model provider or network timed out before the agent turn completed. "
+                                "The traceback and request timing have been logged in the Streamlit terminal. "
+                                "This is commonly a provider/gateway issue; retry after checking provider status, "
+                                "model availability, and your network."
+                            )
+                        else:
+                            st.error("Agent turn failed: " + error)
+                        # Never discard code or prose that arrived before a stream
+                        # failed. Preserve it in the visible chat, clearly marked as
+                        # partial; it is not a successful/final result.
+                        if isinstance(answer, str) and answer.strip():
+                            partial = answer.rstrip() + "\n\n---\n**Partial response — generation was interrupted.**"
+                            answer_area.markdown(partial)
+                            st.session_state.chat_messages.append({"role": "assistant", "content": partial})
+                        st.session_state.chat_messages.append({
+                            "role": "assistant",
+                            "content": ("Generation interrupted: " if (is_timeout or is_gateway_error) else "The turn failed: ") + error,
+                        })
             st.rerun()
 
 with context_tab:
