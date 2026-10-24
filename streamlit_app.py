@@ -102,7 +102,7 @@ if PRODUCTION_MODE:
         st.error(f"Authentication/authorization configuration failed: {type(exc).__name__}. Check OIDC deployment settings.")
         st.stop()
 
-MAX_CHAT_CHARS = 12_000
+MAX_CHAT_CHARS = 100_000
 MAX_DISPLAY_CHARS = 20_000
 _TURN_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="streamlit-agent-turn")
 
@@ -616,7 +616,7 @@ with chat_tab:
 
                         # Save large user-provided source material outside the prompt.
                         agent_message = user_message
-                        if len(user_message) >= 20_000:
+                        if len(user_message.split()) >= 5_000:
                             input_path = f"user-input-{uuid.uuid4().hex[:10]}.md"
                             saved_input = write_workspace_file(user_id, runtime.task_id, input_path, user_message)
                             agent_message = (
@@ -692,7 +692,7 @@ with chat_tab:
                                 answer = "**Updated artifact:** `" + final_artifact_path + "`\n\n" + final_artifact
                             except (OSError, ValueError):
                                 logger.exception("Could not read final artifact for response")
-                        elif len(answer) >= 20_000:
+                        elif len(answer.split()) >= 5_000:
                             output_path = "assistant-response-" + uuid.uuid4().hex[:10] + ".md"
                             saved_output = write_workspace_file(user_id, runtime.task_id, output_path, answer)
                             answer = "**Full response saved to:** `" + saved_output["path"] + "`\n\n" + answer
