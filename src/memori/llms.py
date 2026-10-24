@@ -89,4 +89,7 @@ if mem_llm_provider in openai_compatible_providers:
 query_converter = router_chat.with_structured_output(RetivalTypes, method="json_mode")
 memory_extractor = chat.with_structured_output(MemorySchema, method="function_calling")
 RetrievalRouter = router_chat.with_structured_output(RetrievalPlan, method="json_mode")
-MemoryDecisionGate = router_chat.with_structured_output(MemoryDecision, method="json_mode")
+MemoryDecisionGate = router_chat.with_structured_output(
+    MemoryDecision,
+    method="function_calling",
+)
