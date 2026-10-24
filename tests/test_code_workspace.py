@@ -84,30 +84,30 @@ def test_workspace_enforces_file_size_limit(tmp_path):
 
 
 def test_edit_lines_deletes_only_requested_essay_line(tmp_path):
-    essay = "First line.\\nSecond line.\\nRemove this sentence.\\nFourth line.\\n"
+    essay = "First line.\nSecond line.\nRemove this sentence.\nFourth line.\n"
     write_workspace_file("u", "essay-task", "essay.txt", essay, base_dir=tmp_path)
 
     edit_workspace_lines("u", "essay-task", "essay.txt", 3, 3, base_dir=tmp_path)
 
     assert read_workspace_file("u", "essay-task", "essay.txt", base_dir=tmp_path) == (
-        "First line.\\nSecond line.\\nFourth line.\\n"
+        "First line.\nSecond line.\nFourth line.\n"
     )
 
 
 def test_edit_lines_replaces_only_selected_range(tmp_path):
-    write_workspace_file("u", "essay-task", "essay.md", "Title\\nOld paragraph\\nConclusion\\n", base_dir=tmp_path)
+    write_workspace_file("u", "essay-task", "essay.md", "Title\nOld paragraph\nConclusion\n", base_dir=tmp_path)
 
     edit_workspace_lines(
         "u", "essay-task", "essay.md", 2, 2, "Improved paragraph", base_dir=tmp_path
     )
 
     assert read_workspace_file("u", "essay-task", "essay.md", base_dir=tmp_path) == (
-        "Title\\nImproved paragraph\\nConclusion\\n"
+        "Title\nImproved paragraph\nConclusion\n"
     )
 
 
 def test_edit_lines_rejects_invalid_ranges(tmp_path):
-    write_workspace_file("u", "t", "notes.txt", "one\\ntwo\\n", base_dir=tmp_path)
+    write_workspace_file("u", "t", "notes.txt", "one\ntwo\n", base_dir=tmp_path)
     with pytest.raises(ValueError, match="1-based"):
         edit_workspace_lines("u", "t", "notes.txt", 0, 1, base_dir=tmp_path)
     with pytest.raises(ValueError, match="exceeds"):
