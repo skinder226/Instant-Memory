@@ -1,8 +1,7 @@
-"""Safe per-user/task source workspace for resumable coding-agent sessions.
+"""Persistent per-user/task artifact workspace for resumable agent sessions.
 
-The workspace stores source files outside LLM context. Tools can inspect and update
-existing files so the model can make focused edits instead of regenerating projects.
-This is a local workspace, not an OS-level sandbox for executing arbitrary code.
+Stores essays, notes, plans, reports, code and other text artifacts outside LLM context.
+Agents can read, patch or edit specific lines instead of regenerating whole artifacts.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ MAX_FILE_BYTES = 1_000_000
 MAX_FILES = 500
 _ALLOWED_SUFFIXES = {
     ".html", ".htm", ".css", ".js", ".jsx", ".ts", ".tsx", ".json",
-    ".md", ".txt", ".py", ".yaml", ".yml", ".toml", ".svg", ".xml",
+    ".md", ".txt", ".rst", ".csv", ".tex", ".py", ".yaml", ".yml", ".toml", ".svg", ".xml",
 }
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+"),
@@ -134,6 +133,36 @@ def apply_workspace_patch(
         raise ValueError(f"patch requires exactly one match; found {matches}")
     updated = current.replace(old_text, new_text, 1)
     return write_workspace_file(user_id, task_id, relative_path, updated, base_dir=base_dir)
+
+
+def edit_workspace_lines(
+    user_id: str,
+    task_id: str,
+    relative_path: str,
+    start_line: int,
+    end_line: int,
+    replacement: str = "",
+    *,
+    base_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Replace a 1-based inclusive line range; empty replacement deletes those lines."""
+    if not isinstance(start_line, int) or not isinstance(end_line, int):
+        raise TypeError("start_line and end_line must be integers")
+    if start_line < 1 or end_line < start_line:
+        raise ValueError("line range must be valid and 1-based")
+    current = read_workspace_file(user_id, task_id, relative_path, base_dir=base_dir)
+    lines = current.splitlines(keepends=True)
+    if end_line > len(lines):
+        raise ValueError(f"line range exceeds artifact length ({len(lines)} lines)")
+    replacement_lines = replacement.splitlines(keepends=True)
+    if replacement and not replacement.endswith(("\\n", "\\r")):
+        replacement_lines[-1] += "\\n" if (end_line < len(lines) or current.endswith("\\n")) else ""
+    updated_lines = lines[: start_line - 1] + replacement_lines + lines[end_line:]
+    result = write_workspace_file(
+        user_id, task_id, relative_path, "".join(updated_lines), base_dir=base_dir
+    )
+    result.update({"edited_lines": [start_line, end_line], "replacement_line_count": len(replacement_lines)})
+    return result
 
 
 class _HTMLCheck(HTMLParser):
