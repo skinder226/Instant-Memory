@@ -22,7 +22,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import streamlit as st
-import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from pymongo import MongoClient, DESCENDING
 from langchain.agents import create_agent
@@ -157,7 +156,7 @@ def render_agent_answer(answer_area, answer: str) -> None:
         answer_area.markdown(answer)
         return
     answer_area.success("HTML website detected. Preview is sandboxed below.")
-    components.html(html_document, height=720, scrolling=True)
+    st.iframe(html_document, height=720, scrolling=True)
     with st.expander("View generated HTML source"):
         st.code(html_document[:MAX_DISPLAY_CHARS], language="html")
 
