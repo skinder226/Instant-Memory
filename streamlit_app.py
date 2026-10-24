@@ -277,7 +277,7 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     def workspace_read_file(path: str) -> str:
         """Read an existing project file from this task's persistent workspace before deciding what to change."""
         content = read_workspace_file(user_id, holder["runtime"].task_id, path)
-        return redact_workspace_text(content)[:20_000]
+        return redact_workspace_text(content)[:80_000]
 
     @tool
     def workspace_write_file(path: str, content: str) -> str:
@@ -347,8 +347,10 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
             "an authorized tool actually performed it. When asked to create an artifact such as an essay, email, "
             "story, report, plan, notes, answer, or code, provide the requested content and save it in the current "
             "task workspace when useful. Never claim an artifact was saved or delivered unless a tool confirms it. "
-            "When the user asks to continue or make a small change, inspect the existing artifact and preserve all "
+            "When the user asks to continue, complete, or make a small change, inspect the existing artifact and preserve all "
             "unmodified content; do not regenerate the whole document just to change a sentence or remove a line. "
+            "For continuation requests such as complete/finish/continue this essay or report, append or fill only the missing part in the saved artifact. "
+            "For targeted edits, change only the requested section/snippet/lines. After any artifact edit, the application will display the complete saved artifact as the final response, so your own final message should briefly describe what changed rather than repeat the whole file. "
             "For any ongoing artifact task, first call workspace_list_files and inspect the relevant saved content with " 
             "workspace_read_file. Reuse the existing artifact. Use workspace_edit_lines for explicit line-number edits, " 
             "workspace_apply_patch for one exact text change, and workspace_write_file for a new artifact or a " 
@@ -588,11 +590,47 @@ with chat_tab:
                         turn_started = datetime.now(timezone.utc)
                         answer = ""
                         answer_area = st.empty()
+
+                        # Snapshot workspace state so edits return the complete saved artifact.
+                        workspace_before = list_workspace_files(user_id, runtime.task_id)
+                        before_by_path = {item["path"]: item for item in workspace_before}
+                        requested_path = next(
+                            (item["path"] for item in workspace_before if item["path"].lower() in user_message.lower()),
+                            None,
+                        )
+                        continuation_request = bool(re.search(
+                            r"\b(continue|complete|finish|resume|edit|change|remove|delete|replace|add to|update|revise)\b",
+                            user_message, re.IGNORECASE,
+                        ))
+                        preview_path = requested_path or (
+                            workspace_before[0]["path"] if continuation_request and len(workspace_before) == 1 else None
+                        )
+                        before_content = None
+                        if continuation_request and preview_path:
+                            try:
+                                before_content = read_workspace_file(user_id, runtime.task_id, preview_path)
+                                with st.expander(f"Existing artifact before editing · {preview_path}", expanded=True):
+                                    st.markdown(before_content)
+                            except (OSError, ValueError):
+                                before_content = None
+
+                        # Save large user-provided source material outside the prompt.
+                        agent_message = user_message
+                        if len(user_message) >= 20_000:
+                            input_path = f"user-input-{uuid.uuid4().hex[:10]}.md"
+                            saved_input = write_workspace_file(user_id, runtime.task_id, input_path, user_message)
+                            agent_message = (
+                                "The complete user request/source is saved to " + saved_input["path"] + ". "
+                                "Read it with workspace_read_file before responding. Preserve existing text; "
+                                "if asked to continue or complete it, add only missing content and save the complete artifact."
+                            )
+                            st.info("Long input saved to workspace: `" + saved_input["path"] + "`")
+
                         if runtime.streaming:
                             result = None
                             pending_display = ""
                             last_display_update = time.monotonic()
-                            for stream_event in runtime.stream(user_message):
+                            for stream_event in runtime.stream(agent_message):
                                 if stream_event["type"] == "token":
                                     token = stream_event["content"]
                                     answer += token
@@ -609,9 +647,8 @@ with chat_tab:
                             if result is None:
                                 raise RuntimeError("Agent stream ended without a final result.")
                             answer = result.get("answer") or answer or "(The agent returned an empty answer.)"
-                            render_agent_answer(answer_area, answer)
                         else:
-                            future = _TURN_EXECUTOR.submit(runtime.run, user_message)
+                            future = _TURN_EXECUTOR.submit(runtime.run, agent_message)
                             live_trace = st.empty()
                             while not future.done():
                                 live_events = list(db.agent_events.find(
@@ -632,7 +669,35 @@ with chat_tab:
                                 time.sleep(0.7)
                             result = future.result()
                             answer = result.get("answer") or "(The agent returned an empty answer.)"
-                            render_agent_answer(answer_area, answer)
+
+                        # If agent tools changed a saved artifact, return the complete final file.
+                        workspace_after = list_workspace_files(user_id, runtime.task_id)
+                        after_by_path = {item["path"]: item for item in workspace_after}
+                        changed_paths = [
+                            path for path in (set(before_by_path) | set(after_by_path))
+                            if before_by_path.get(path) != after_by_path.get(path)
+                        ]
+                        if not changed_paths and preview_path and before_content is not None:
+                            try:
+                                if read_workspace_file(user_id, runtime.task_id, preview_path) != before_content:
+                                    changed_paths.append(preview_path)
+                            except (OSError, ValueError):
+                                pass
+                        final_artifact_path = requested_path if requested_path in changed_paths else (
+                            changed_paths[0] if len(changed_paths) == 1 else None
+                        )
+                        if final_artifact_path:
+                            try:
+                                final_artifact = read_workspace_file(user_id, runtime.task_id, final_artifact_path)
+                                answer = "**Updated artifact:** `" + final_artifact_path + "`\n\n" + final_artifact
+                            except (OSError, ValueError):
+                                logger.exception("Could not read final artifact for response")
+                        elif len(answer) >= 20_000:
+                            output_path = "assistant-response-" + uuid.uuid4().hex[:10] + ".md"
+                            saved_output = write_workspace_file(user_id, runtime.task_id, output_path, answer)
+                            answer = "**Full response saved to:** `" + saved_output["path"] + "`\n\n" + answer
+
+                        render_agent_answer(answer_area, answer)
                         status.update(label="Agent turn completed", state="complete", expanded=False)
                         if result.get("memory_retrieval_error"):
                             st.warning("Long-term memory retrieval failed: " + str(result["memory_retrieval_error"]))
