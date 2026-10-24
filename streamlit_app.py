@@ -644,7 +644,7 @@ with chat_tab:
                                     now = time.monotonic()
                                     if len(pending_display) >= 80 or now - last_display_update >= 0.12:
                                         visible_text = (
-                                            stream_prefix + "\\n\\n" + answer if stream_prefix else answer
+                                            stream_prefix + "\n\n" + answer if stream_prefix else answer
                                         )
                                         answer_area.markdown(visible_text + "▌")
                                         pending_display = ""
