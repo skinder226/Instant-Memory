@@ -38,7 +38,7 @@ def workspace_root(user_id: str, task_id: str, base_dir: str | Path | None = Non
         raise ValueError("user_id must be a non-empty string")
     if not isinstance(task_id, str) or not task_id.strip():
         raise ValueError("task_id must be a non-empty string")
-    base = Path(base_dir or os.getenv("MEMORI_WORKSPACE_ROOT", "workspace")).expanduser().resolve()
+    base = Path(base_dir or os.getenv("MEMORI_WORKSPACE_ROOT", ".memori-workspaces")).expanduser().resolve()
     root = (base / _slug(user_id) / _slug(task_id)).resolve()
     if root != base and base not in root.parents:
         raise ValueError("workspace path escapes configured root")
