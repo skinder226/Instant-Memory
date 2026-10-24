@@ -321,16 +321,70 @@ def event_title(event: dict[str, Any]) -> str:
 
 
 def load_task_messages(user_id: str, task_id: str) -> list[dict[str, str]]:
-    events = retrieve_agent_history(user_id, task_id=task_id, limit=200)
+    """Restore complete messages, joining persisted chunks for long AI answers."""
+    events = retrieve_agent_history(user_id, task_id=task_id, limit=500)
     messages: list[dict[str, str]] = []
+    assistant_chunks: dict[str, dict[int, str]] = {}
+    assistant_order: dict[str, tuple[int, str]] = {}
     for event in events:
         if event.get("event_type") != "message":
             continue
         role = event.get("role")
         content = str(event.get("content") or "")
+        if role not in {"user", "assistant"} or not content:
+            continue
+        if role == "assistant" and event.get("metadata", {}).get("answer_chunk_count"):
+            turn_id = str(event.get("turn_id") or event.get("event_id"))
+            metadata = event.get("metadata") or {}
+            try:
+                index = int(metadata.get("answer_chunk_index", 0))
+                count = int(metadata.get("answer_chunk_count", 1))
+            except (TypeError, ValueError):
+                messages.append({"role": role, "content": content})
+                continue
+            assistant_chunks.setdefault(turn_id, {})[index] = content
+            assistant_order[turn_id] = (events.index(event), turn_id)
+            continue
+        messages.append({"role": role, "content": content})
+    # Reinsert reconstructed assistant answers by their original event position.
+    for turn_id, parts in assistant_chunks.items():
+        count = next(
+            (int((e.get("metadata") or {}).get("answer_chunk_count", 1))
+             for e in events
+             if e.get("turn_id") == turn_id and e.get("role") == "assistant"
+             and (e.get("metadata") or {}).get("answer_chunk_count")),
+            len(parts),
+        )
+        answer = "".join(parts.get(i, "") for i in range(count))
+        position, _ = assistant_order[turn_id]
+        messages.append({"_position": position, "role": "assistant", "content": answer})
+    # Keep chronological order after combining multi-event assistant messages.
+    indexed = []
+    for event_index, event in enumerate(events):
+        if event.get("event_type") != "message":
+            continue
+        role = event.get("role")
+        if role == "assistant" and (event.get("metadata") or {}).get("answer_chunk_count"):
+            turn_id = str(event.get("turn_id") or event.get("event_id"))
+            if turn_id in assistant_chunks:
+                continue
+        content = str(event.get("content") or "")
         if role in {"user", "assistant"} and content:
-            messages.append({"role": role, "content": content})
-    return messages
+            indexed.append((event_index, {"role": role, "content": content}))
+    for turn_id, parts in assistant_chunks.items():
+        count = next(
+            (int((e.get("metadata") or {}).get("answer_chunk_count", 1))
+             for e in events
+             if e.get("turn_id") == turn_id and e.get("role") == "assistant"
+             and (e.get("metadata") or {}).get("answer_chunk_count")),
+            len(parts),
+        )
+        indexed.append((assistant_order[turn_id][0], {
+            "role": "assistant",
+            "content": "".join(parts.get(i, "") for i in range(count)),
+        }))
+    indexed.sort(key=lambda item: item[0])
+    return [message for _, message in indexed]
 
 
 st.title("🧠 Instant-Memory Studio")
