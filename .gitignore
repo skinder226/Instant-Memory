@@ -12,3 +12,6 @@ venv/
 dist/
 build/
 *.egg-info/
+
+# Generated per-user/task coding workspaces (keep out of Git)
+.memori-workspaces/
