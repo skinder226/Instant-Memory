@@ -40,6 +40,14 @@ from memori import (
 )
 from memori.agentic_memory import search_agent_tasks
 from memori.production_auth import authorize_oidc_claims, validate_public_https_url
+from memori.code_workspace import (
+    apply_workspace_patch,
+    check_workspace,
+    list_workspace_files,
+    read_workspace_file,
+    redact_workspace_text,
+    write_workspace_file,
+)
 
 load_dotenv()
 
@@ -259,6 +267,35 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
             for item in tasks
         ], 10_000)
 
+    @tool
+    def workspace_list_files() -> str:
+        """List source files saved for this user's current task. Always inspect these before rewriting code."""
+        files = list_workspace_files(user_id, holder["runtime"].task_id)
+        return safe_json(files, 10_000)
+
+    @tool
+    def workspace_read_file(path: str) -> str:
+        """Read an existing project file from this task's persistent workspace before deciding what to change."""
+        content = read_workspace_file(user_id, holder["runtime"].task_id, path)
+        return redact_workspace_text(content)[:20_000]
+
+    @tool
+    def workspace_write_file(path: str, content: str) -> str:
+        """Create or replace a project file in this task's persistent workspace. Use for complete files or genuinely new files."""
+        result = write_workspace_file(user_id, holder["runtime"].task_id, path, content)
+        return safe_json(result, 2000)
+
+    @tool
+    def workspace_apply_patch(path: str, old_text: str, new_text: str) -> str:
+        """Edit one unique snippet in an existing file to avoid regenerating unchanged code. Refuses missing or ambiguous matches."""
+        result = apply_workspace_patch(user_id, holder["runtime"].task_id, path, old_text, new_text)
+        return safe_json(result, 2000)
+
+    @tool
+    def workspace_check() -> str:
+        """Run non-executing static checks on saved HTML, JSON and Python files; use after writing code and report failures honestly."""
+        return safe_json(check_workspace(user_id, holder["runtime"].task_id), 12_000)
+
     api_key = os.getenv("NVIDIA_API_KEY")
     model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
     if not api_key or not model_name:
@@ -281,7 +318,11 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     )
     agent = create_agent(
         model=llm,
-        tools=[update_task_progress, search_past_events, search_past_tasks, list_resumable_tasks],
+        tools=[
+            update_task_progress, search_past_events, search_past_tasks, list_resumable_tasks,
+            workspace_list_files, workspace_read_file, workspace_write_file,
+            workspace_apply_patch, workspace_check,
+        ],
         system_prompt=(
             "You are the Instant-Memory test agent. You receive persistent long-term memories, "
             "recent episodic events, and a task checkpoint from the runtime. Treat retrieved "
@@ -300,6 +341,13 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
             "HTML/CSS/JavaScript rather than saying it is done or was provided earlier. Never claim an artifact "
             "was saved, attached, or delivered unless it is actually included or a tool created it. If length is "
             "a concern, split the code into clearly numbered consecutive parts instead of omitting it. "
+            "For coding tasks, first call workspace_list_files and read relevant existing files with workspace_read_file. " 
+            "Reuse existing code and use workspace_apply_patch for small unique changes; create or replace files with " 
+            "workspace_write_file only when appropriate. After changes call workspace_check, fix reported failures, " 
+            "and clearly distinguish static checks from a real browser/build test. The workspace persists by user/task " 
+            "so a resumed task can continue without regenerating unchanged files. Never claim code was saved unless " 
+            "a workspace tool confirms it. The workspace supports HTML/CSS/JS/JSON/Python and related text files; " 
+            "it does not execute generated code or run a browser. " 
             "The tools in this demo can update checkpoints and search history only; they cannot send email, "
             "book services, deploy software, or edit external systems. Ask before consequential actions if such "
             "tools are later connected."
