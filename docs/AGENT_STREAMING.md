@@ -38,6 +38,22 @@ Token events depend on the configured model and agent propagating LangChain call
 
 ## 504 and provider timeouts
 
-The Streamlit demo uses MEMORI_AGENT_TIMEOUT_SECONDS (default 180) for the model request and allows two client retries for transient request errors. Set the environment variable to a provider-supported value if needed. Streaming can improve time-to-first-token but does not guarantee that a provider or gateway 504 will disappear. Inspect provider status, request limits, model availability, and server logs when 504s persist.
+The Streamlit demo uses these environment settings:
 
-Retries are configured at the model client layer; the runtime does not blindly replay a completed agent turn, which could repeat tool side effects.
+- `MEMORI_AGENT_TIMEOUT_SECONDS`: per-model-request timeout in seconds (default `180`).
+- `MEMORI_AGENT_MAX_RETRIES`: model-client retries for transient request errors (default `2`).
+
+For example, in `.env`:
+
+```dotenv
+MEMORI_AGENT_TIMEOUT_SECONDS=240
+MEMORI_AGENT_MAX_RETRIES=3
+```
+
+Restart Streamlit after changing environment variables. These are per-request settings, not a hard deadline for the whole agent turn. A turn can make multiple model requests and tool calls, so total duration can exceed the configured timeout.
+
+Studio now writes a dedicated `[memori.studio]` log line and full exception traceback to the Streamlit terminal when a turn fails. The log includes user/session/task identifiers, elapsed time, exception type, and how many response characters arrived before failure; it does not log API keys. The UI distinguishes likely timeout/gateway failures from other exceptions and preserves any partial streamed text, marked as interrupted rather than successful.
+
+Streaming can improve time-to-first-token but cannot guarantee that a provider or gateway 502/503/504 will disappear. Check the provider's status page, model availability, account limits, and request IDs if exposed by the provider. A larger timeout only helps when the provider eventually responds; it does not repair an outage or invalid model configuration.
+
+Retries are configured at the model-client layer. The runtime does not blindly replay a whole agent turn after an exception, because it may already have invoked tools or performed side effects. If the provider is down, Studio will report the failure clearly rather than claim it can always produce an answer.
