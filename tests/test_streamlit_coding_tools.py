@@ -27,6 +27,7 @@ def test_streamlit_html_preview_uses_iframe_not_deprecated_component():
 def test_agent_prompt_describes_general_artifact_reuse_and_line_edits():
     source = (Path(__file__).resolve().parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
     assert "any ongoing artifact task" in source
-    assert "essay, report, answer, or file" in source
+    assert "essay, email, " in source
+    assert "preserve all " in source
     assert "workspace_edit_lines" in source
     assert "For coding tasks, first call workspace_list_files" not in source
