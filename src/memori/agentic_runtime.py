@@ -9,7 +9,9 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Iterator
+from queue import Queue
+from threading import Thread
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -157,6 +159,17 @@ class _ToolEventRecorder(BaseCallbackHandler):
         )
 
 
+class _TokenCallback(BaseCallbackHandler):
+    """Forward model tokens to a consumer without coupling the runtime to a UI."""
+
+    def __init__(self, callback: Callable[[str], None]) -> None:
+        self.callback = callback
+
+    def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
+        if token:
+            self.callback(token)
+
+
 class AgenticMemoryRuntime:
     """Memory-aware runtime for an already-configured LangChain agent.
 
@@ -179,6 +192,7 @@ class AgenticMemoryRuntime:
         history_limit: int = 20,
         memory_limit_chars: int = 8_000,
         context_messages: int = 8,
+        streaming: bool = False,
     ) -> None:
         if not isinstance(user_id, str) or not user_id.strip():
             raise ValueError("user_id must be a non-empty string.")
@@ -193,6 +207,7 @@ class AgenticMemoryRuntime:
         self.history_limit = history_limit
         self.memory_limit_chars = memory_limit_chars
         self.context_messages = max(1, int(context_messages))
+        self.streaming = bool(streaming)
         self._active_turn_id = "startup"
 
     def _event(
@@ -256,7 +271,10 @@ class AgenticMemoryRuntime:
     def search_history(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         return search_agent_events(self.user_id, query, limit=limit)
 
-    def run(self, user_input: str, *, task_goal: str | None = None) -> dict[str, Any]:
+    def run(
+        self, user_input: str, *, task_goal: str | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
         """Run one turn and return answer plus memory/task metadata."""
         if not isinstance(user_input, str) or not user_input.strip():
             raise ValueError("user_input must be a non-empty string.")
@@ -399,9 +417,12 @@ class AgenticMemoryRuntime:
         )
         recorder = _ToolEventRecorder(self, turn_id)
         try:
+            callbacks = [recorder]
+            if self.streaming and on_token is not None:
+                callbacks.append(_TokenCallback(on_token))
             result = self.agent.invoke(
                 {"messages": [{"role": "user", "content": prompt}]},
-                config={"callbacks": [recorder], "metadata": {
+                config={"callbacks": callbacks, "metadata": {
                     "memori_user_id": self.user_id,
                     "memori_session_id": self.session_id,
                     "memori_task_id": self.task_id,
@@ -463,6 +484,39 @@ class AgenticMemoryRuntime:
             except Exception:
                 logger.exception("Failed to checkpoint interrupted agent task")
             raise
+
+    def stream(
+        self, user_input: str, *, task_goal: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield token events followed by one final result event."""
+        if not self.streaming:
+            raise RuntimeError(
+                "Streaming is disabled. Construct AgenticMemoryRuntime(..., streaming=True)."
+            )
+        events: Queue[dict[str, Any] | None] = Queue()
+
+        def emit(token: str) -> None:
+            events.put({"type": "token", "content": token})
+
+        def worker() -> None:
+            try:
+                result = self.run(user_input, task_goal=task_goal, on_token=emit)
+                events.put({"type": "result", "result": result})
+            except BaseException as exc:
+                events.put({"type": "error", "error": exc})
+            finally:
+                events.put(None)
+
+        thread = Thread(target=worker, name="memori-agent-stream", daemon=True)
+        thread.start()
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            if event["type"] == "error":
+                raise event["error"]
+            yield event
+        thread.join()
 
     def pause(self) -> dict[str, Any] | None:
         task = get_agent_task(self.user_id, self.task_id)

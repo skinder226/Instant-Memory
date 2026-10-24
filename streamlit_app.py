@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from pymongo import MongoClient, DESCENDING
 from langchain.agents import create_agent
@@ -108,6 +109,32 @@ def redact_secrets(value: Any) -> Any:
         return json.loads(text)
     except Exception:
         return text
+
+
+
+def extract_html_document(answer: str) -> str | None:
+    """Return a complete HTML document from raw HTML or a fenced HTML block."""
+    if not isinstance(answer, str):
+        return None
+    text = answer.strip()
+    fenced = re.search(r"```(?:html|htm)\s*\n(.*?)\n```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    has_html = re.search(r"<html\b", text, flags=re.IGNORECASE) and re.search(r"</html\s*>", text, flags=re.IGNORECASE)
+    has_fragment = re.search(r"<!doctype\s+html|<body\b", text, flags=re.IGNORECASE) and re.search(r"</(?:body|html)\s*>", text, flags=re.IGNORECASE)
+    return text if has_html or has_fragment else None
+
+
+def render_agent_answer(answer_area, answer: str) -> None:
+    """Render generated HTML as a sandboxed preview with source available."""
+    html_document = extract_html_document(answer)
+    if html_document is None:
+        answer_area.markdown(answer)
+        return
+    answer_area.success("HTML website detected. Preview is sandboxed below.")
+    components.html(html_document, height=720, scrolling=True)
+    with st.expander("View generated HTML source"):
+        st.code(html_document[:MAX_DISPLAY_CHARS], language="html")
 
 
 def get_database(uri: str):
@@ -220,7 +247,7 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     if not api_key or not model_name:
         raise RuntimeError("Set NVIDIA_API_KEY and NVIDIA_MODEL in .env before starting chat.")
 
-    llm = ChatOpenAI(api_key=api_key, model=model_name, temperature=0,base_url="https://integrate.api.nvidia.com/v1")
+    llm = ChatOpenAI(api_key=api_key, model=model_name, temperature=0, streaming=True, timeout=float(os.getenv("MEMORI_AGENT_TIMEOUT_SECONDS", "180")), max_retries=2, base_url="https://integrate.api.nvidia.com/v1")
     agent = create_agent(
         model=llm,
         tools=[update_task_progress, search_past_events, search_past_tasks, list_resumable_tasks],
@@ -250,6 +277,7 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     runtime = AgenticMemoryRuntime(
         user_id=user_id, agent=agent, session_id=session_id, task_id=task_id,
         history_limit=20, memory_limit_chars=8000,
+        streaming=True,  # Enable token streaming here; no UI toggle is exposed.
     )
     holder["runtime"] = runtime
     return runtime
@@ -443,29 +471,54 @@ with chat_tab:
                         # Run the agent in a worker so this Streamlit script can poll
                         # MongoDB and display persisted tool/context events while it works.
                         turn_started = datetime.now(timezone.utc)
-                        future = _TURN_EXECUTOR.submit(runtime.run, user_message)
-                        live_trace = st.empty()
-                        while not future.done():
-                            live_events = list(db.agent_events.find(
-                                {"user_id": user_id, "session_id": runtime.session_id,
-                                 "created_at": {"$gte": turn_started}},
-                                {"_id": 0, "created_at": 1, "event_type": 1, "role": 1,
-                                 "content": 1, "tool_name": 1},
-                            ).sort("created_at", DESCENDING).limit(8))
-                            live_events.reverse()
-                            with live_trace.container(border=True):
-                                st.markdown("**Live trace — latest persisted events**")
-                                if not live_events:
-                                    st.caption("Waiting for retrieval and event logging…")
-                                for live_event in live_events:
-                                    st.markdown(f"- **{live_event.get('event_type')}** · "
-                                                f"{live_event.get('tool_name') or live_event.get('role', 'system')} — "
-                                                f"{str(redact_secrets(live_event.get('content', '')))[:220]}")
-                            time.sleep(0.7)
-                        result = future.result()
-                        answer = result.get("answer") or "(The agent returned an empty answer.)"
+                        answer = ""
+                        answer_area = st.empty()
+                        if runtime.streaming:
+                            result = None
+                            pending_display = ""
+                            last_display_update = time.monotonic()
+                            for stream_event in runtime.stream(user_message):
+                                if stream_event["type"] == "token":
+                                    token = stream_event["content"]
+                                    answer += token
+                                    pending_display += token
+                                    # Batch UI redraws; one Streamlit render per token can
+                                    # overwhelm the frontend during large code responses.
+                                    now = time.monotonic()
+                                    if len(pending_display) >= 80 or now - last_display_update >= 0.12:
+                                        answer_area.markdown(answer + "▌")
+                                        pending_display = ""
+                                        last_display_update = now
+                                elif stream_event["type"] == "result":
+                                    result = stream_event["result"]
+                            if result is None:
+                                raise RuntimeError("Agent stream ended without a final result.")
+                            answer = result.get("answer") or answer or "(The agent returned an empty answer.)"
+                            render_agent_answer(answer_area, answer)
+                        else:
+                            future = _TURN_EXECUTOR.submit(runtime.run, user_message)
+                            live_trace = st.empty()
+                            while not future.done():
+                                live_events = list(db.agent_events.find(
+                                    {"user_id": user_id, "session_id": runtime.session_id,
+                                     "created_at": {"$gte": turn_started}},
+                                    {"_id": 0, "created_at": 1, "event_type": 1, "role": 1,
+                                     "content": 1, "tool_name": 1},
+                                ).sort("created_at", DESCENDING).limit(8))
+                                live_events.reverse()
+                                with live_trace.container(border=True):
+                                    st.markdown("**Live trace — latest persisted events**")
+                                    if not live_events:
+                                        st.caption("Waiting for retrieval and event logging…")
+                                    for live_event in live_events:
+                                        st.markdown(f"- **{live_event.get('event_type')}** · "
+                                                    f"{live_event.get('tool_name') or live_event.get('role', 'system')} — "
+                                                    f"{str(redact_secrets(live_event.get('content', '')))[:220]}")
+                                time.sleep(0.7)
+                            result = future.result()
+                            answer = result.get("answer") or "(The agent returned an empty answer.)"
+                            render_agent_answer(answer_area, answer)
                         status.update(label="Agent turn completed", state="complete", expanded=False)
-                        st.markdown(answer)
                         if result.get("memory_retrieval_error"):
                             st.warning("Long-term memory retrieval failed: " + str(result["memory_retrieval_error"]))
                         st.caption(
