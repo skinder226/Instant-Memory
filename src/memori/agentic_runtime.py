@@ -443,7 +443,26 @@ class AgenticMemoryRuntime:
                     None,
                 )
             answer = str(getattr(final_message, "content", "")) if final_message else _json_text(result)
-            self._event(turn_id=turn_id, role="assistant", event_type="message", content=answer)
+            # Persist long answers as ordered chunks. A single MongoDB event is
+            # bounded to 50k characters; truncating here silently broke task resume
+            # for generated websites and other long artifacts.
+            chunk_size = 40_000
+            answer_chunks = [answer[i:i + chunk_size] for i in range(0, len(answer), chunk_size)] or [""]
+            for chunk_index, chunk in enumerate(answer_chunks):
+                record_agent_event(
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                    turn_id=turn_id,
+                    task_id=self.task_id,
+                    role="assistant",
+                    event_type="message",
+                    content=chunk,
+                    metadata={
+                        "answer_chunk_index": chunk_index,
+                        "answer_chunk_count": len(answer_chunks),
+                    },
+                    event_id=f"{self.session_id}-{turn_id}-assistant-answer-{chunk_index}",
+                )
             latest = get_agent_task(self.user_id, self.task_id) or task
             if latest.get("status") == "running":
                 save_agent_task(
