@@ -42,6 +42,7 @@ from memori.production_auth import authorize_oidc_claims, validate_public_https_
 from memori.code_workspace import (
     apply_workspace_patch,
     check_workspace,
+    edit_workspace_lines,
     list_workspace_files,
     read_workspace_file,
     redact_workspace_text,
@@ -295,6 +296,14 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
         """Run non-executing static checks on saved HTML, JSON and Python files; use after writing code and report failures honestly."""
         return safe_json(check_workspace(user_id, holder["runtime"].task_id), 12_000)
 
+    @tool
+    def workspace_edit_lines(path: str, start_line: int, end_line: int, replacement: str = "") -> str:
+        """Edit a saved text artifact by 1-based inclusive line numbers. Empty replacement deletes the selected lines; non-empty replacement inserts/replaces content. Use for requests such as 'remove line 7' without rewriting the whole essay or document."""
+        result = edit_workspace_lines(
+            user_id, holder["runtime"].task_id, path, start_line, end_line, replacement
+        )
+        return safe_json(result, 2000)
+
     api_key = os.getenv("NVIDIA_API_KEY")
     model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
     if not api_key or not model_name:
@@ -320,7 +329,7 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
         tools=[
             update_task_progress, search_past_events, search_past_tasks, list_resumable_tasks,
             workspace_list_files, workspace_read_file, workspace_write_file,
-            workspace_apply_patch, workspace_check,
+            workspace_apply_patch, workspace_check, workspace_edit_lines,
         ],
         system_prompt=(
             "You are the Instant-Memory test agent. You receive persistent long-term memories, "
@@ -340,13 +349,12 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
             "HTML/CSS/JavaScript rather than saying it is done or was provided earlier. Never claim an artifact "
             "was saved, attached, or delivered unless it is actually included or a tool created it. If length is "
             "a concern, split the code into clearly numbered consecutive parts instead of omitting it. "
-            "For coding tasks, first call workspace_list_files and read relevant existing files with workspace_read_file. " 
-            "Reuse existing code and use workspace_apply_patch for small unique changes; create or replace files with " 
-            "workspace_write_file only when appropriate. After changes call workspace_check, fix reported failures, " 
-            "and clearly distinguish static checks from a real browser/build test. The workspace persists by user/task " 
-            "so a resumed task can continue without regenerating unchanged files. Never claim code was saved unless " 
-            "a workspace tool confirms it. The workspace supports HTML/CSS/JS/JSON/Python and related text files; " 
-            "it does not execute generated code or run a browser. " 
+            "For any ongoing artifact task, first call workspace_list_files and inspect the relevant saved content with " 
+            "workspace_read_file. Reuse the existing artifact. Use workspace_edit_lines for explicit line-number edits, " 
+            "workspace_apply_patch for one exact text change, and workspace_write_file for a new artifact or a " 
+            "substantial intentional rewrite. Save changes through tools and confirm the result. Use workspace_check " 
+            "only where its static checks apply; do not imply essays or prose are 'compiled'. The workspace persists " 
+            "by user/task, enabling the agent to continue from existing content without regenerating unchanged sections. " 
             "The tools in this demo can update checkpoints and search history only; they cannot send email, "
             "book services, deploy software, or edit external systems. Ask before consequential actions if such "
             "tools are later connected."
