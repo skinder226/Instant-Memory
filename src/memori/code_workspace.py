@@ -156,7 +156,7 @@ def edit_workspace_lines(
         raise ValueError(f"line range exceeds artifact length ({len(lines)} lines)")
     replacement_lines = replacement.splitlines(keepends=True)
     if replacement and not replacement.endswith(("\n", "\r")):
-        replacement_lines[-1] += "\n" if (end_line < len(lines) or current.endswith("\\n")) else ""
+        replacement_lines[-1] += "\n" if (end_line < len(lines) or current.endswith("\n")) else ""
     updated_lines = lines[: start_line - 1] + replacement_lines + lines[end_line:]
     result = write_workspace_file(
         user_id, task_id, relative_path, "".join(updated_lines), base_dir=base_dir
