@@ -683,6 +683,7 @@ with chat_tab:
                         changed_paths = [
                             path for path in (set(before_by_path) | set(after_by_path))
                             if before_by_path.get(path) != after_by_path.get(path)
+                            and not path.startswith("user-input-")
                         ]
                         if not changed_paths and preview_path and before_content is not None:
                             try:
