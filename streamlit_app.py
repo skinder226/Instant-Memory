@@ -34,6 +34,7 @@ from memori import (
     get_agent_task,
     list_resumable_agent_tasks,
     retrieve_agent_history,
+    record_agent_event,
     save_agent_task,
     search_agent_events,
 )
@@ -613,6 +614,30 @@ with chat_tab:
                         if isinstance(answer, str) and answer.strip():
                             partial = answer.rstrip() + "\n\n---\n**Partial response — generation was interrupted.**"
                             answer_area.markdown(partial)
+                            # Persist interrupted output too, so resuming this task
+                            # restores what was actually generated rather than losing it.
+                            try:
+                                chunk_size = 40_000
+                                chunks = [partial[i:i + chunk_size] for i in range(0, len(partial), chunk_size)]
+                                partial_turn_id = f"partial-{uuid.uuid4().hex}"
+                                for chunk_index, chunk in enumerate(chunks):
+                                    record_agent_event(
+                                        user_id=user_id,
+                                        session_id=runtime.session_id,
+                                        turn_id=partial_turn_id,
+                                        task_id=runtime.task_id,
+                                        role="assistant",
+                                        event_type="message",
+                                        content=chunk,
+                                        metadata={
+                                            "answer_chunk_index": chunk_index,
+                                            "answer_chunk_count": len(chunks),
+                                            "partial": True,
+                                        },
+                                        event_id=f"{runtime.session_id}-{partial_turn_id}-{chunk_index}",
+                                    )
+                            except Exception:
+                                logger.exception("Could not persist interrupted partial answer")
                             st.session_state.chat_messages.append({"role": "assistant", "content": partial})
                         st.session_state.chat_messages.append({
                             "role": "assistant",
