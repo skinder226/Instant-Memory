@@ -2,20 +2,6 @@
 
 Instant-Memory is a MongoDB-first memory pipeline with semantic retrieval through Pinecone and relationship/multi-hop retrieval through Neo4j.
 
-## Interactive Streamlit Studio
-
-Run the local chat and observability UI to send messages directly to the memory-enabled agent and inspect retrieved context, tool calls/results, task checkpoints, and event history:
-
-```powershell
-uv sync
-uv run streamlit run streamlit_app.py
-```
-
-Open the local URL printed by Streamlit (usually `http://localhost:8501`). Configure `mongodb_URI`, `Mem_llm_Api`, and `Mem_model` in `.env`. The current UI tools can update task progress and search history; they do not perform arbitrary external actions.
-
-See [the Streamlit Studio guide](docs/STREAMLIT_STUDIO.md) for acceptance tests, diagnostics, and production-hardening requirements. The UI runs in development mode by default. Setting `MEMORI_ENV=production` enables the app's Streamlit OIDC login flow and derives the tenant key from the verified identity provider issuer and subject. Configure OIDC, HTTPS, secrets, and tenant-isolation tests before deployment; see the [Streamlit Studio guide](docs/STREAMLIT_STUDIO.md).
-
-
 ## Public API
 
 Use one function to retrieve memories for a message:
@@ -149,9 +135,9 @@ Important integration notes:
 3. Configure the existing provider and database environment variables in a local .env file. Do not commit secrets. The implementation uses MongoDB as the source of truth, Pinecone for semantic retrieval, and Neo4j for graph retrieval.
 4. From the repository root, import the package as shown above.
 
-## Development
+## Development and quality checks
 
-Run tests with:
+Tests and CI configuration are maintained in the GitHub repository to validate changes, but they are not included in the built PyPI distribution. Run tests from a development checkout with:
 
     uv run pytest
 
