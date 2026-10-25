@@ -562,8 +562,8 @@ if st.session_state.pop("run_diagnostics", False):
             st.error(f"{label}: {type(exc).__name__}: {exc}")
     st.info("Diagnostics do not mutate memory or call the LLM. Send a chat message to test retrieval and background save.")
 
-overview, chat_tab, context_tab, tools_tab, tasks_tab, timeline_tab, diagnostics_tab = st.tabs(
-    ["Overview", "💬 Chat", "Retrieved context", "Tool calls", "Tasks", "Event timeline", "Diagnostics"]
+overview, chat_tab, context_tab, tools_tab, tasks_tab, timeline_tab, usage_tab, diagnostics_tab = st.tabs(
+    ["Overview", "💬 Chat", "Retrieved context", "Tool calls", "Tasks", "Event timeline", "Token & word usage", "Diagnostics"]
 )
 
 with overview:
@@ -605,6 +605,11 @@ with chat_tab:
                         turn_started = datetime.now(timezone.utc)
                         answer = ""
                         answer_area = st.empty()
+
+                        # Capture per-turn input size. Token figures are estimates unless provider usage is available.
+                        input_word_count = len(user_message.split())
+                        input_char_count = len(user_message)
+                        input_token_estimate = (input_char_count + 3) // 4
 
                         # Snapshot workspace state so edits return the complete saved artifact.
                         workspace_before = list_workspace_files(user_id, runtime.task_id)
@@ -719,6 +724,28 @@ with chat_tab:
                             output_path = "assistant-response-" + uuid.uuid4().hex[:10] + ".md"
                             saved_output = write_workspace_file(user_id, runtime.task_id, output_path, answer)
                             answer = "**Full response saved to:** `" + saved_output["path"] + "`\n\n" + answer
+
+                        # Keep a per-turn usage ledger visible in the Streamlit UI.
+                        output_word_count = len(answer.split())
+                        output_char_count = len(answer)
+                        usage_record = {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "task_id": runtime.task_id,
+                            "turn_id": result.get("turn_id", "—"),
+                            "input_words": input_word_count,
+                            "input_chars": input_char_count,
+                            "input_tokens_est": input_token_estimate,
+                            "agent_request_words": len(agent_message.split()),
+                            "agent_request_chars": len(agent_message),
+                            "agent_request_tokens_est": (len(agent_message) + 3) // 4,
+                            "output_words": output_word_count,
+                            "output_chars": output_char_count,
+                            "output_tokens_est": (output_char_count + 3) // 4,
+                            "provider_input_tokens": result.get("input_tokens"),
+                            "provider_output_tokens": result.get("output_tokens"),
+                            "provider_total_tokens": result.get("total_tokens"),
+                        }
+                        st.session_state.setdefault("usage_records", []).append(usage_record)
 
                         render_agent_answer(answer_area, answer)
                         status.update(label="Agent turn completed", state="complete", expanded=False)
@@ -870,6 +897,45 @@ with timeline_tab:
                 st.caption(f"Tool: {event.get('tool_name')} · Call ID: {event.get('tool_call_id', '—')}")
             with st.expander("Full event record"):
                 st.json(redact_secrets(event), expanded=False)
+
+with usage_tab:
+    st.subheader("Input/output token and word usage")
+    st.caption(
+        "Word counts are exact for the text shown. Token counts marked estimated use roughly 1 token per 4 characters; "
+        "they are not provider billing counts. Exact provider token usage is shown only when the runtime returns it."
+    )
+    usage_records = list(reversed(st.session_state.get("usage_records", [])))
+    if not usage_records:
+        st.info("No usage records yet. Send a message in the Chat tab.")
+    else:
+        latest = usage_records[0]
+        a, b, c, d = st.columns(4)
+        a.metric("Input words", f"{latest['input_words']:,}")
+        b.metric("Input tokens (est.)", f"{latest['input_tokens_est']:,}")
+        c.metric("Output words", f"{latest['output_words']:,}")
+        d.metric("Output tokens (est.)", f"{latest['output_tokens_est']:,}")
+        exact_input = latest.get("provider_input_tokens")
+        exact_output = latest.get("provider_output_tokens")
+        exact_total = latest.get("provider_total_tokens")
+        if any(value is not None for value in (exact_input, exact_output, exact_total)):
+            x, y, z = st.columns(3)
+            x.metric("Provider input tokens", f"{exact_input:,}" if exact_input is not None else "—")
+            y.metric("Provider output tokens", f"{exact_output:,}" if exact_output is not None else "—")
+            z.metric("Provider total tokens", f"{exact_total:,}" if exact_total is not None else "—")
+        st.markdown("**Latest turn details**")
+        st.json(latest, expanded=True)
+        st.markdown("**Recent turn history**")
+        for record in usage_records[:50]:
+            with st.expander(
+                f"{record.get('timestamp', '')} · in {record['input_words']:,} words / "
+                f"{record['input_tokens_est']:,} estimated tokens · out {record['output_words']:,} words / "
+                f"{record['output_tokens_est']:,} estimated tokens",
+                expanded=False,
+            ):
+                st.json(record, expanded=False)
+        if st.button("Clear usage history for this Streamlit session", type="secondary"):
+            st.session_state["usage_records"] = []
+            st.rerun()
 
 with diagnostics_tab:
     st.subheader("Integration checks")
