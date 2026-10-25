@@ -16,7 +16,6 @@ Its main components are:
 - **Gemini embeddings** — current embedding implementation uses `gemini-embedding-001` by default.
 - **Outbox synchronization** — records work to project MongoDB memories into Pinecone and Neo4j.
 - **Agentic APIs** — optional APIs for episodic conversation/tool events and resumable task state.
-- **Streamlit Studio** — local interactive agent and diagnostics UI; separate from the library API.
 
 The package can be integrated into an existing application. The host application remains responsible for user authentication, request authorization, its answer-generating LLM, deployment, quotas, and operational alerting.
 
@@ -127,12 +126,6 @@ The outbox should be idempotent, have bounded retries/backoff, dead-letter/faile
 
 The separate `agentic_memory.py` APIs record agent events (messages, tool-call requests/results) in `agent_events` and task checkpoints in `agent_tasks`. These APIs do not automatically intercept arbitrary LangChain/LangGraph agent loops; the host agent must call them explicitly and safely resume work. Event history is not the same thing as semantic vector retrieval.
 
-### Streamlit Studio
-
-Run locally with `uv run streamlit run streamlit_app.py`. It is a development/testing console with chat, traces, context snapshots, task checkpoints and usage estimates. Its built-in tools do not provide arbitrary web browsing, email sending, booking, or external deployment. Production mode has an OIDC flow, but it must be configured and tested with a real identity provider, HTTPS, an allowlist, and two-tenant isolation tests before use.
-
-## 7. Performance: what makes it fast, and what does not
-
 ### Current latency design
 
 - Retrieval is synchronous; saving/index projection is scheduled in the background.
@@ -229,4 +222,3 @@ It should **not be described as production-ready solely because these components
 
 - [README](../README.md)
 - [Production hardening checklist](PRODUCTION_HARDENING.md)
-- [Streamlit Studio guide](STREAMLIT_STUDIO.md)
