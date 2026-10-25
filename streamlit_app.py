@@ -299,10 +299,25 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
     @tool
     def workspace_edit_lines(path: str, start_line: int, end_line: int, replacement: str = "") -> str:
         """Edit a saved text artifact by 1-based inclusive line numbers. Empty replacement deletes the selected lines; non-empty replacement inserts/replaces content. Use for requests such as 'remove line 7' without rewriting the whole essay or document."""
-        result = edit_workspace_lines(
-            user_id, holder["runtime"].task_id, path, start_line, end_line, replacement
-        )
-        return safe_json(result, 2000)
+        try:
+            result = edit_workspace_lines(
+                user_id, holder["runtime"].task_id, path, start_line, end_line, replacement
+            )
+            return safe_json({"ok": True, **result}, 2000)
+        except (ValueError, FileNotFoundError, TypeError) as exc:
+            # Tool errors should be recoverable agent feedback, not crash the whole turn.
+            try:
+                current = read_workspace_file(user_id, holder["runtime"].task_id, path)
+                line_count = len(current.splitlines())
+            except Exception:
+                line_count = None
+            return safe_json({
+                "ok": False,
+                "error": str(exc),
+                "path": path,
+                "actual_line_count": line_count,
+                "instruction": "Read the file again, calculate the valid 1-based line range, and retry. Do not stop the turn because this edit failed."
+            }, 2000)
 
     api_key = os.getenv("NVIDIA_API_KEY")
     model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
@@ -349,8 +364,8 @@ def build_agent_runtime(user_id: str, session_id: str, task_id: str):
             "task workspace when useful. Never claim an artifact was saved or delivered unless a tool confirms it. "
             "When the user asks to continue, complete, or make a small change, inspect the existing artifact and preserve all "
             "unmodified content; do not regenerate the whole document just to change a sentence or remove a line. "
-            "For continuation requests such as complete/finish/continue this essay or report, append or fill only the missing part in the saved artifact. "
-            "For targeted edits, change only the requested section/snippet/lines. After any artifact edit, the application will display the complete saved artifact as the final response, so your own final message should briefly describe what changed rather than repeat the whole file. "
+            "For continuation requests such as complete/finish/continue this essay or report, read the current artifact first, then generate ONLY the missing/new portion and save the complete updated artifact with existing text preserved exactly. Do not repeat existing paragraphs in your natural-language answer; tools plus the application harness assemble the complete final response. "
+            "For targeted edits, change only the requested section/snippet/lines. If workspace_edit_lines returns ok=false or a line-range error, reread the file, use its actual line count and retry with a valid range; a failed tool edit must not fail the whole agent turn. After any artifact edit, the application harness displays the complete saved artifact as the final response, so your own final message should only report what changed rather than repeat existing content. "
             "For any ongoing artifact task, first call workspace_list_files and inspect the relevant saved content with " 
             "workspace_read_file. Reuse the existing artifact. Use workspace_edit_lines for explicit line-number edits, " 
             "workspace_apply_patch for one exact text change, and workspace_write_file for a new artifact or a " 
@@ -613,8 +628,8 @@ with chat_tab:
                                     st.markdown(before_content)
                             except (OSError, ValueError):
                                 before_content = None
-                        is_continue_only = bool(re.search(r"\\b(continue|complete|finish)\\b", user_message, re.IGNORECASE)) and not bool(
-                            re.search(r"\\b(change|edit|remove|delete|replace|rewrite)\\b", user_message, re.IGNORECASE)
+                        is_continue_only = bool(re.search(r"\b(continue|complete|finish)\b", user_message, re.IGNORECASE)) and not bool(
+                            re.search(r"\b(change|edit|remove|delete|replace|rewrite)\b", user_message, re.IGNORECASE)
                         )
                         stream_prefix = before_content if is_continue_only and before_content else ""
 
