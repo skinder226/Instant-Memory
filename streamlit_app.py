@@ -596,9 +596,25 @@ with overview:
 with chat_tab:
     st.subheader("Talk to your memory-enabled agent")
     st.caption("Each submitted message runs long-term retrieval, assembles episodic/task context, invokes the LLM agent, records events, and schedules memory ingestion through memori().")
-    for item in st.session_state.chat_messages:
+    for message_index, item in enumerate(st.session_state.chat_messages):
         with st.chat_message(item["role"]):
-            st.markdown(item["content"])
+            message_content = item["content"]
+            if (
+                item["role"] == "assistant"
+                and st.session_state.get("show_large_content_as_file", True)
+                and len(message_content.split()) > DEFAULT_LARGE_CONTENT_WORD_THRESHOLD
+            ):
+                st.download_button(
+                    label="Download response",
+                    data=message_content,
+                    file_name=f"response-{message_index + 1}.md",
+                    mime="text/markdown",
+                    key=f"history-large-response-{runtime.task_id}-{message_index}",
+                )
+                with st.expander("View full response", expanded=False):
+                    render_agent_answer(st, message_content)
+            else:
+                st.markdown(message_content)
     user_message = st.chat_input("Send a message to Instant-Memory…", max_chars=MAX_CHAT_CHARS)
     if user_message:
         if len(user_message) > MAX_CHAT_CHARS:
