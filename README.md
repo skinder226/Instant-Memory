@@ -199,9 +199,11 @@ The router model must support structured/function-calling output, because these
 calls use Pydantic schemas.
 
 
-## Production hardening
+## Production guide and hardening
 
-See [docs/PRODUCTION_HARDENING.md](docs/PRODUCTION_HARDENING.md) for the production
+Read [docs/PRODUCTION_GUIDE.md](docs/PRODUCTION_GUIDE.md) for the system architecture, retrieval and background-saving pipelines, data stores, performance trade-offs, setup, and production release checklist.
+
+See [docs/PRODUCTION_HARDENING.md](docs/PRODUCTION_HARDENING.md) for the detailed production
 release gates, failure-injection plan, tenant-isolation requirements, backup/restore
 drills, and latency/monitoring targets.
 
