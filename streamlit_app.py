@@ -104,6 +104,7 @@ if PRODUCTION_MODE:
 
 MAX_CHAT_CHARS = 100_000
 MAX_DISPLAY_CHARS = 20_000
+DEFAULT_LARGE_CONTENT_WORD_THRESHOLD = 500
 _TURN_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="streamlit-agent-turn")
 
 
@@ -476,6 +477,15 @@ with st.sidebar:
             for key in ("runtime", "chat_messages", "runtime_user", "active_session_id", "active_task_id"):
                 st.session_state.pop(key, None)
             st.rerun()
+    st.divider()
+    st.subheader("Response preferences")
+    show_large_content_as_file = st.checkbox(
+        "Large content as a file",
+        value=st.session_state.get("show_large_content_as_file", True),
+        key="show_large_content_as_file",
+        help="When enabled, responses longer than 500 words are presented as a downloadable file instead of a long chat message.",
+    )
+    st.caption("File presentation threshold: 500 words")
     refresh = st.checkbox("Auto-refresh traces (5 seconds)", value=False)
     if refresh:
         from streamlit_autorefresh import st_autorefresh
@@ -700,6 +710,10 @@ with chat_tab:
                             result = future.result()
                             answer = result.get("answer") or "(The agent returned an empty answer.)"
 
+                        # Keep the full answer internally, but present long content as a file when enabled.
+                        large_content_filename = None
+                        large_content_body = None
+
                         # If agent tools changed a saved artifact, return the complete final file.
                         workspace_after = list_workspace_files(user_id, runtime.task_id)
                         after_by_path = {item["path"]: item for item in workspace_after}
@@ -720,13 +734,17 @@ with chat_tab:
                         if final_artifact_path:
                             try:
                                 final_artifact = read_workspace_file(user_id, runtime.task_id, final_artifact_path)
-                                answer = "**Updated artifact:** `" + final_artifact_path + "`\n\n" + final_artifact
+                                answer = final_artifact
+                                if show_large_content_as_file and len(final_artifact.split()) > DEFAULT_LARGE_CONTENT_WORD_THRESHOLD:
+                                    large_content_filename = final_artifact_path.rsplit("/", 1)[-1]
+                                    large_content_body = final_artifact
                             except (OSError, ValueError):
                                 logger.exception("Could not read final artifact for response")
-                        elif len(answer.split()) >= 5_000:
+                        elif show_large_content_as_file and len(answer.split()) > DEFAULT_LARGE_CONTENT_WORD_THRESHOLD:
                             output_path = "assistant-response-" + uuid.uuid4().hex[:10] + ".md"
                             saved_output = write_workspace_file(user_id, runtime.task_id, output_path, answer)
-                            answer = "**Full response saved to:** `" + saved_output["path"] + "`\n\n" + answer
+                            large_content_filename = saved_output["path"].rsplit("/", 1)[-1]
+                            large_content_body = answer
 
                         # Keep a per-turn usage ledger visible in the Streamlit UI.
                         output_word_count = len(answer.split())
@@ -750,7 +768,18 @@ with chat_tab:
                         }
                         st.session_state.setdefault("usage_records", []).append(usage_record)
 
-                        render_agent_answer(answer_area, answer)
+                        if large_content_body is not None and large_content_filename:
+                            st.download_button(
+                                label="Download response",
+                                data=large_content_body,
+                                file_name=large_content_filename,
+                                mime="text/markdown",
+                                key=f"large-response-{result.get('turn_id', uuid.uuid4().hex)}",
+                            )
+                            with st.expander("View full response", expanded=True):
+                                render_agent_answer(st, large_content_body)
+                        else:
+                            render_agent_answer(answer_area, answer)
                         status.update(label="Agent turn completed", state="complete", expanded=False)
                         if result.get("memory_retrieval_error"):
                             st.warning("Long-term memory retrieval failed: " + str(result["memory_retrieval_error"]))
