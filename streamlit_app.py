@@ -151,6 +151,15 @@ def extract_html_document(answer: str) -> str | None:
     return text if has_html or has_fragment else None
 
 
+def is_artifact_request(user_message: str) -> bool:
+    """True only when the user asked for a deliverable artifact, not a long explanation."""
+    return bool(re.search(
+        r"\b(essay|eassy|report|story|article|blog post|write[- ]?up|document|proposal|plan|script|source code|code|program|function|class|website|web app|html|css|javascript|python file|\.py|\.js|\.html|\.css|\.md|\.docx|\.pdf|spreadsheet|csv|json file|README|create a file|write a file|save as a file|draft)\b",
+        user_message,
+        flags=re.IGNORECASE,
+    ))
+
+
 def render_agent_answer(answer_area, answer: str) -> None:
     """Render generated HTML as a sandboxed preview with source available."""
     html_document = extract_html_document(answer)
@@ -485,7 +494,7 @@ with st.sidebar:
         key="show_large_content_as_file",
         help="When enabled, responses longer than 500 words are presented as a downloadable file instead of a long chat message.",
     )
-    st.caption("File presentation threshold: 500 words")
+    st.caption("Files are used only for long requested deliverables (for example essays or code), not ordinary explanations.")
     refresh = st.checkbox("Auto-refresh traces (5 seconds)", value=False)
     if refresh:
         from streamlit_autorefresh import st_autorefresh
@@ -601,8 +610,8 @@ with chat_tab:
             message_content = item["content"]
             if (
                 item["role"] == "assistant"
+                and item.get("as_file", False)
                 and st.session_state.get("show_large_content_as_file", True)
-                and len(message_content.split()) > DEFAULT_LARGE_CONTENT_WORD_THRESHOLD
             ):
                 st.download_button(
                     label="Download response",
@@ -726,9 +735,10 @@ with chat_tab:
                             result = future.result()
                             answer = result.get("answer") or "(The agent returned an empty answer.)"
 
-                        # Keep the full answer internally, but present long content as a file when enabled.
+                        # File presentation is for actual deliverables (essays/code/etc.), not long explanations.
                         large_content_filename = None
                         large_content_body = None
+                        artifact_requested = is_artifact_request(user_message)
 
                         # If agent tools changed a saved artifact, return the complete final file.
                         workspace_after = list_workspace_files(user_id, runtime.task_id)
@@ -751,12 +761,12 @@ with chat_tab:
                             try:
                                 final_artifact = read_workspace_file(user_id, runtime.task_id, final_artifact_path)
                                 answer = final_artifact
-                                if show_large_content_as_file and len(final_artifact.split()) > DEFAULT_LARGE_CONTENT_WORD_THRESHOLD:
+                                if artifact_requested and show_large_content_as_file and len(final_artifact.split()) > DEFAULT_LARGE_CONTENT_WORD_THRESHOLD:
                                     large_content_filename = final_artifact_path.rsplit("/", 1)[-1]
                                     large_content_body = final_artifact
                             except (OSError, ValueError):
                                 logger.exception("Could not read final artifact for response")
-                        elif show_large_content_as_file and len(answer.split()) > DEFAULT_LARGE_CONTENT_WORD_THRESHOLD:
+                        elif artifact_requested and show_large_content_as_file and len(answer.split()) > DEFAULT_LARGE_CONTENT_WORD_THRESHOLD:
                             output_path = "assistant-response-" + uuid.uuid4().hex[:10] + ".md"
                             saved_output = write_workspace_file(user_id, runtime.task_id, output_path, answer)
                             large_content_filename = saved_output["path"].rsplit("/", 1)[-1]
@@ -792,8 +802,8 @@ with chat_tab:
                                 mime="text/markdown",
                                 key=f"large-response-{result.get('turn_id', uuid.uuid4().hex)}",
                             )
-                            with st.expander("View full response", expanded=True):
-                                render_agent_answer(st, large_content_body)
+                            # Render the deliverable directly in chat: no extra "here is the essay" wrapper.
+                            render_agent_answer(answer_area, large_content_body)
                         else:
                             render_agent_answer(answer_area, answer)
                         status.update(label="Agent turn completed", state="complete", expanded=False)
@@ -804,7 +814,11 @@ with chat_tab:
                             f"Memory save scheduled: {result.get('memory_save_scheduled', False)} · "
                             f"Turn: {result.get('turn_id', '—')}"
                         )
-                        st.session_state.chat_messages.append({"role": "assistant", "content": answer})
+                        st.session_state.chat_messages.append({
+                            "role": "assistant",
+                            "content": answer,
+                            "as_file": bool(large_content_body is not None and large_content_filename),
+                        })
                     except Exception as exc:
                         elapsed = (datetime.now(timezone.utc) - turn_started).total_seconds() if "turn_started" in locals() else 0
                         logger.exception(
