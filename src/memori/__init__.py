@@ -1,16 +1,14 @@
-"""Public interface for the Instant-Memory package."""
+"""Public interface for the Instant-Memory package.
+
+The library deliberately does not configure application logging. Applications
+can configure the `memori` logger through their own logging configuration.
+"""
 
 import logging
-import sys
 
-# Show memori's INFO logs (ROUTER START/DONE, RETRIEVAL_TIMING, save results) in the terminal.
-_log = logging.getLogger("memori")
-if not _log.handlers:
-    _handler = logging.StreamHandler(sys.stdout)
-    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    _log.addHandler(_handler)
-_log.setLevel(logging.INFO)
-_log.propagate = False
+# Avoid Python's "No handler found" behavior without taking control of the
+# host application's logging destinations or log levels.
+logging.getLogger("memori").addHandler(logging.NullHandler())
 
 from .api import memori
 from .agentic_runtime import AgenticMemoryRuntime
