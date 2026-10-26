@@ -31,6 +31,24 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
+      - name: Verify release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          tag_version = os.environ["RELEASE_TAG"].removeprefix("v")
+          if tag_version != version:
+              raise SystemExit(
+                  f"Release tag v{tag_version} does not match pyproject.toml version {version}"
+              )
+          print(f"Publishing Instant-Memory {version}")
+          PY
+
       - name: Install project and development dependencies
         run: uv sync --all-groups
 
