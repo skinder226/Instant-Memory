@@ -32,6 +32,40 @@ def _slug(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
 
 
+
+def _cloud_collection():
+    """Return the shared MongoDB collection used by cloud-hosted workspaces."""
+    from datetime import datetime, timezone
+    from .mongodb_connection import db
+
+    collection = db["workspace_files"]
+    collection.create_index(
+        [("user_key", 1), ("task_key", 1), ("path", 1)],
+        unique=True,
+        name="workspace_user_task_path_unique",
+    )
+    return collection
+
+
+def _cloud_keys(user_id: str, task_id: str) -> tuple[str, str]:
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("user_id must be a non-empty string")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("task_id must be a non-empty string")
+    return _slug(user_id), _slug(task_id)
+
+
+def _relative_path(relative_path: str) -> str:
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        raise ValueError("path must be a non-empty relative path")
+    normalized = relative_path.replace("\\\\", "/")
+    candidate = Path(normalized)
+    if candidate.is_absolute() or any(part in {"..", ""} for part in normalized.split("/")):
+        raise ValueError("path must stay inside the task workspace")
+    if candidate.suffix.lower() not in _ALLOWED_SUFFIXES:
+        raise ValueError(f"unsupported file type: {candidate.suffix or '(no extension)'}")
+    return candidate.as_posix()
+
 def workspace_root(user_id: str, task_id: str, base_dir: str | Path | None = None) -> Path:
     if not isinstance(user_id, str) or not user_id.strip():
         raise ValueError("user_id must be a non-empty string")
@@ -65,6 +99,13 @@ def _safe_file(root: Path, relative_path: str, *, allow_new: bool = False) -> Pa
 
 
 def list_workspace_files(user_id: str, task_id: str, *, base_dir: str | Path | None = None) -> list[dict[str, Any]]:
+    if base_dir is None:
+        user_key, task_key = _cloud_keys(user_id, task_id)
+        cursor = _cloud_collection().find(
+            {"user_key": user_key, "task_key": task_key},
+            {"_id": 0, "path": 1, "bytes": 1},
+        ).sort("path", 1).limit(MAX_FILES)
+        return [{"path": item["path"], "bytes": item["bytes"]} for item in cursor]
     root = workspace_root(user_id, task_id, base_dir)
     results: list[dict[str, Any]] = []
     for path in sorted(root.rglob("*")):
@@ -84,6 +125,18 @@ def list_workspace_files(user_id: str, task_id: str, *, base_dir: str | Path | N
 def read_workspace_file(
     user_id: str, task_id: str, relative_path: str, *, base_dir: str | Path | None = None
 ) -> str:
+    if base_dir is None:
+        user_key, task_key = _cloud_keys(user_id, task_id)
+        rel = _relative_path(relative_path)
+        doc = _cloud_collection().find_one(
+            {"user_key": user_key, "task_key": task_key, "path": rel},
+            {"_id": 0, "content": 1, "bytes": 1},
+        )
+        if doc is None:
+            raise FileNotFoundError(relative_path)
+        if doc["bytes"] > MAX_FILE_BYTES:
+            raise ValueError(f"file exceeds {MAX_FILE_BYTES} bytes")
+        return doc["content"]
     root = workspace_root(user_id, task_id, base_dir)
     path = _safe_file(root, relative_path)
     size = path.stat().st_size
@@ -104,6 +157,21 @@ def write_workspace_file(
         raise TypeError("content must be a string")
     if len(content.encode("utf-8")) > MAX_FILE_BYTES:
         raise ValueError(f"file exceeds {MAX_FILE_BYTES} bytes")
+    if base_dir is None:
+        from datetime import datetime, timezone
+        user_key, task_key = _cloud_keys(user_id, task_id)
+        rel = _relative_path(relative_path)
+        collection = _cloud_collection()
+        query = {"user_key": user_key, "task_key": task_key, "path": rel}
+        if collection.find_one(query, {"_id": 1}) is None:
+            if collection.count_documents({"user_key": user_key, "task_key": task_key}) >= MAX_FILES:
+                raise ValueError(f"workspace cannot contain more than {MAX_FILES} files")
+        size = len(content.encode("utf-8"))
+        collection.update_one(query, {"$set": {
+            "user_key": user_key, "task_key": task_key, "path": rel,
+            "content": content, "bytes": size, "updated_at": datetime.now(timezone.utc),
+        }}, upsert=True)
+        return {"path": rel, "bytes": size}
     root = workspace_root(user_id, task_id, base_dir)
     path = _safe_file(root, relative_path, allow_new=True)
     if not path.exists() and sum(1 for p in root.rglob("*") if p.is_file()) >= MAX_FILES:
@@ -176,7 +244,6 @@ class _HTMLCheck(HTMLParser):
 
 def check_workspace(user_id: str, task_id: str, *, base_dir: str | Path | None = None) -> dict[str, Any]:
     """Run bounded, non-executing syntax/structure checks and report results."""
-    root = workspace_root(user_id, task_id, base_dir)
     files = list_workspace_files(user_id, task_id, base_dir=base_dir)
     results: list[dict[str, str]] = []
     for item in files:
