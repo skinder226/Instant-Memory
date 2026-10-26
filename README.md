@@ -129,7 +129,21 @@ Important integration notes:
 
 Agent artifact files (for example, generated HTML, code, notes, and reports) are stored in MongoDB's `workspace_files` collection by default. This makes them available across serverless invocations and application instances on Vercel, Netlify, and other hosts, provided they can reach the configured MongoDB deployment. The files are scoped using hashed user and task keys and a validated relative path.
 
-Configure `mongodb_URI` or `MONGODB_URI` to point to your hosted MongoDB deployment (MongoDB Atlas has a free tier subject to its current limits). Workspace artifacts are stored separately from long-term memories, agent events, and tasks. Do not expose the database URI to browser code. Your host application must authenticate users and pass a verified user identity to the workspace APIs.
+By default, workspace files reuse the same MongoDB connection and database as the Memori system (`mongodb_URI` or `MONGODB_URI`). If you want Claude/agent workspace artifacts in a separate MongoDB deployment, set `CLAUDE_MONGODB_URI` to that deployment's connection string. The URI should include a database name; alternatively set `CLAUDE_MONGODB_DATABASE` to select one explicitly. `CLAUDE_MONGODB_STORAGE_URI` is also accepted as an alias.
+
+Example environment configuration:
+
+```dotenv
+# Existing Memori database (still used for memories, events, tasks, etc.)
+MONGODB_URI=mongodb+srv://.../memori_db?retryWrites=true&w=majority
+
+# Optional dedicated database for workspace files only
+CLAUDE_MONGODB_URI=mongodb+srv://.../claude_workspace_db?retryWrites=true&w=majority
+# Optional only if the URI above has no database name:
+# CLAUDE_MONGODB_DATABASE=claude_workspace_db
+```
+
+If `CLAUDE_MONGODB_URI` (or its alias) is not set, workspace files automatically use the existing Memori MongoDB connection—no second URL is required. The workspace collection is `workspace_files` and remains separate from long-term memories, agent events, and tasks. Keep both connection strings server-side; never expose them in browser code. Your host application must authenticate users and pass a verified user identity to the workspace APIs.
 
 For tests and explicit local development only, workspace functions accept `base_dir=...`; passing that option selects local filesystem storage. Do not use local workspace storage for persistent production data on serverless platforms. The MongoDB collection is created on first use.
 
