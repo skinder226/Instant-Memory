@@ -125,6 +125,14 @@ Important integration notes:
 - These new collections and APIs require integration/failure-recovery tests against
   your deployment before treating them as production-certified.
 
+## Cloud-backed agent workspaces
+
+Agent artifact files (for example, generated HTML, code, notes, and reports) are stored in MongoDB's `workspace_files` collection by default. This makes them available across serverless invocations and application instances on Vercel, Netlify, and other hosts, provided they can reach the configured MongoDB deployment. The files are scoped using hashed user and task keys and a validated relative path.
+
+Configure `mongodb_URI` or `MONGODB_URI` to point to your hosted MongoDB deployment (MongoDB Atlas has a free tier subject to its current limits). Workspace artifacts are stored separately from long-term memories, agent events, and tasks. Do not expose the database URI to browser code. Your host application must authenticate users and pass a verified user identity to the workspace APIs.
+
+For tests and explicit local development only, workspace functions accept `base_dir=...`; passing that option selects local filesystem storage. Do not use local workspace storage for persistent production data on serverless platforms. The MongoDB collection is created on first use.
+
 ## Setup
 
 1. Install Python 3.11 or newer (below 3.15).
