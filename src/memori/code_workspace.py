@@ -1,7 +1,7 @@
-"""Persistent per-user/task artifact workspace for resumable agent sessions.
+"""Cloud-backed per-user/task artifact workspace for resumable agent sessions.
 
-Stores essays, notes, plans, reports, code and other text artifacts outside LLM context.
-Agents can read, patch or edit specific lines instead of regenerating whole artifacts.
+By default artifacts are stored in MongoDB so they survive serverless invocations.
+Pass base_dir explicitly only for local development and tests.
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def _cloud_keys(user_id: str, task_id: str) -> tuple[str, str]:
 def _relative_path(relative_path: str) -> str:
     if not isinstance(relative_path, str) or not relative_path.strip():
         raise ValueError("path must be a non-empty relative path")
-    normalized = relative_path.replace("\\\\", "/")
+    normalized = relative_path.replace("\\", "/")
     candidate = Path(normalized)
     if candidate.is_absolute() or any(part in {"..", ""} for part in normalized.split("/")):
         raise ValueError("path must stay inside the task workspace")
