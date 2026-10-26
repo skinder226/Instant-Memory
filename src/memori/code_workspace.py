@@ -33,17 +33,55 @@ def _slug(value: str) -> str:
 
 
 
-def _cloud_collection():
-    """Return the shared MongoDB collection used by cloud-hosted workspaces."""
-    from datetime import datetime, timezone
-    from .mongodb_connection import db
+_workspace_client = None
+_workspace_client_lock = __import__("threading").Lock()
+_workspace_index_ready = False
+_workspace_index_lock = __import__("threading").Lock()
 
-    collection = db["workspace_files"]
-    collection.create_index(
-        [("user_key", 1), ("task_key", 1), ("path", 1)],
-        unique=True,
-        name="workspace_user_task_path_unique",
-    )
+
+def _cloud_collection():
+    """Use optional dedicated workspace MongoDB, falling back to Memori's DB."""
+    global _workspace_client, _workspace_index_ready
+
+    # CLAUDE_MONGODB_URI is optional. If absent, reuse the normal Memori
+    # MongoDB connection and database. If present, use that URI's database
+    # (or the explicit CLAUDE_MONGODB_DATABASE override).
+    workspace_uri = os.getenv("CLAUDE_MONGODB_URI") or os.getenv("CLAUDE_MONGODB_STORAGE_URI")
+    if workspace_uri:
+        from pymongo import MongoClient
+
+        with _workspace_client_lock:
+            if _workspace_client is None:
+                _workspace_client = MongoClient(
+                    workspace_uri,
+                    serverSelectionTimeoutMS=int(os.getenv("MONGODB_SERVER_SELECTION_TIMEOUT_MS", "5000")),
+                    connectTimeoutMS=int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", "5000")),
+                    socketTimeoutMS=int(os.getenv("MONGODB_SOCKET_TIMEOUT_MS", "15000")),
+                )
+        database_name = os.getenv("CLAUDE_MONGODB_DATABASE")
+        if database_name:
+            workspace_db = _workspace_client[database_name]
+        else:
+            workspace_db = _workspace_client.get_default_database()
+            if workspace_db is None:
+                raise RuntimeError(
+                    "CLAUDE_MONGODB_URI must include a database name, or set CLAUDE_MONGODB_DATABASE."
+                )
+        collection = workspace_db["workspace_files"]
+    else:
+        from .mongodb_connection import db
+        collection = db["workspace_files"]
+
+    # Index creation is cached per process to avoid repeating this command for
+    # every read/write. MongoDB enforces the unique key across app instances.
+    with _workspace_index_lock:
+        if not _workspace_index_ready:
+            collection.create_index(
+                [("user_key", 1), ("task_key", 1), ("path", 1)],
+                unique=True,
+                name="workspace_user_task_path_unique",
+            )
+            _workspace_index_ready = True
     return collection
 
 
