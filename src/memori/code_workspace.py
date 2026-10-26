@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -34,9 +35,9 @@ def _slug(value: str) -> str:
 
 
 _workspace_client = None
-_workspace_client_lock = __import__("threading").Lock()
+_workspace_client_lock = threading.Lock()
 _workspace_index_ready = False
-_workspace_index_lock = __import__("threading").Lock()
+_workspace_index_lock = threading.Lock()
 
 
 def _cloud_collection():
