@@ -15,6 +15,8 @@ from rapidfuzz.distance import Levenshtein
 
 logger = logging.getLogger(__name__)
 _background_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memori-ingest")
+# Projection sync can involve Pinecone/Neo4j network calls; keep it off the ingestion workers.
+_sync_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="memori-sync")
 _routing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="memori-routing")
 
 
@@ -517,17 +519,34 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
         }):
             previous_by_id.setdefault(str(old.get("id")), []).append(old)
 
+    # Resolve every explicitly superseded project in one round-trip instead
+    # of issuing one find_one for each incoming memory/reference.
+    explicit_ids = list(dict.fromkeys(
+        old_id
+        for item in prepared
+        for old_id in item["explicit_supersedes"]
+        if ObjectId.is_valid(old_id)
+    ))
+    explicit_docs_by_id = {}
+    if explicit_ids:
+        explicit_docs_by_id = {
+            str(old["_id"]): old
+            for old in db["memories"].find({
+                "_id": {"$in": [ObjectId(value) for value in explicit_ids]},
+                "user_id": user_id,
+                "type": "project",
+            })
+        }
+
     explicit_superseded_by_item = []
     explicit_old_ids = set()
     for item in prepared:
-        old_docs = []
-        for old_id in item["explicit_supersedes"]:
-            if not ObjectId.is_valid(old_id):
-                continue
-            old = db["memories"].find_one({"_id": ObjectId(old_id), "user_id": user_id, "type": "project"})
-            if old:
-                old_docs.append(old)
-                explicit_old_ids.add(str(old["_id"]))
+        old_docs = [
+            explicit_docs_by_id[old_id]
+            for old_id in item["explicit_supersedes"]
+            if old_id in explicit_docs_by_id
+        ]
+        explicit_old_ids.update(str(old["_id"]) for old in old_docs)
         explicit_superseded_by_item.append(old_docs)
 
     previous_updates = []
@@ -802,7 +821,9 @@ def _save_message_background(user_id: str, user_input: str, role: str,
             repaired_existing_project = _attach_explicit_project_supersession(user_id, user_input, [])
 
         if response.memories or repaired_existing_project:
-            save_pending_memory(user_id)
+            # Mongo memory + outbox are already durable. Do not hold up the
+            # ingestion worker while remote vector/graph projections are synced.
+            _sync_executor.submit(save_pending_memory, user_id)
 
         if response.placeholder_updates:
             now = datetime.now(timezone.utc).isoformat()
@@ -914,6 +935,27 @@ def _requires_personal_name_lookup(message: str) -> bool:
     return bool(re.search(
         r"\b(?:what|tell me|remind me of|remember)\b.{0,30}\b(?:my|may)\s+name\b|"
         r"\b(?:who am i|what is the user's name)\b",
+        text,
+        re.IGNORECASE,
+    ))
+
+
+def _is_obvious_durable_fact(message: str) -> bool:
+    """Recognize simple declarative facts that can skip the extra decision LLM.
+
+    The extractor still validates and structures the message. We only bypass
+    the redundant routing call for common first-person facts.
+    """
+    text = message.strip()
+    if not text or _looks_like_question(text):
+        return False
+    return bool(re.match(
+        r"^(?:"
+        r"i\s+(?:am|['’]m|work\s+(?:at|for)|live\s+in|prefer|like|love|hate|"
+        r"have|use|built|created|manage|study|studied|work\s+on|am\s+working\s+on)\b|"
+        r"my\s+(?:name\s+(?:is|:)|friend\s+is|job\s+is|goal\s+is|company\s+is|"
+        r"project\s+is|role\s+is|birthday\s+is)\b"
+        r")",
         text,
         re.IGNORECASE,
     ))
@@ -1136,6 +1178,16 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         )
         result["memory_save_scheduled"] = True
         logger.info("RETRIEVAL_PATH user_id=%s path=immediate_name_fact", user_id)
+        return result
+
+    # Common first-person facts do not need a separate decision-gate LLM call.
+    # The extractor remains authoritative and still rejects non-durable content.
+    if _is_obvious_durable_fact(user_input):
+        _background_executor.submit(
+            _save_message_background, user_id, user_input, role, False
+        )
+        result["memory_save_scheduled"] = True
+        logger.info("SAVE_PATH user_id=%s path=direct_fact_no_router", user_id)
         return result
 
     collaborator_match = re.search(
