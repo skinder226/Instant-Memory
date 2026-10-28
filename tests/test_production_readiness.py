@@ -236,3 +236,34 @@ def test_historical_task_search_never_reads_another_users_tasks(monkeypatch):
     monkeypatch.setattr(memory, "list_agent_tasks", fake_list_agent_tasks)
     ranked = memory.search_agent_tasks("verified-tenant-1", "What website did I ask you to create last time?")
     assert [task["task_id"] for task in ranked] == ["tenant-one-task"]
+
+
+
+def test_explicit_name_statement_is_immediately_available_before_save_finishes(monkeypatch):
+    """The next turn must see an explicit name even while background extraction is pending."""
+    import memori.api as api
+
+    scheduled = []
+    monkeypatch.setattr(
+        api._background_executor,
+        "submit",
+        lambda *args, **kwargs: scheduled.append((args, kwargs)),
+    )
+
+    saved = api.memori("instant-name-user", "may name is skinder", source="user")
+    assert saved["memory_save_scheduled"] is True
+    assert len(scheduled) == 1
+    # Bypass the decision-gate LLM and send the statement straight to the async extractor.
+    assert scheduled[0][0][0] == api._save_message_background
+
+    answer = api.memori("instant-name-user", "what is may name", source="user")
+    assert answer["retrieval"] == ["The user's name is skinder."]
+    assert answer["memory_save_scheduled"] is False
+
+
+def test_explicit_name_statement_parser_accepts_my_and_may_typo():
+    from memori.api import _extract_explicit_name_fact
+
+    assert _extract_explicit_name_fact("My name is Skinder.") == "Skinder"
+    assert _extract_explicit_name_fact("may name is skinder") == "skinder"
+    assert _extract_explicit_name_fact("I like the name Skinder") is None
