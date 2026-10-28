@@ -125,6 +125,120 @@ Important integration notes:
 - These new collections and APIs require integration/failure-recovery tests against
   your deployment before treating them as production-certified.
 
+## AgenticMemoryRuntime: use your own tools
+
+Use `AgenticMemoryRuntime` when you want your existing LangChain agent to use
+Instant-Memory's long-term memories together with conversation history and task
+checkpoints. **Define and authorize tools in your agent as usual**; pass the
+configured agent to the runtime. You do not pass the tools directly to
+`AgenticMemoryRuntime`.
+
+Install a provider integration if your project does not already have one:
+
+```powershell
+uv add langchain-groq
+```
+
+Set your provider key and a tool-calling model in your server-side environment
+(for example, in `.env`):
+
+```dotenv
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=your_supported_tool_calling_model
+```
+
+Then configure your custom tools and wrap the agent:
+
+```python
+import os
+
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain_groq import ChatGroq
+from memori import AgenticMemoryRuntime
+
+
+# Replace this example with your own authorized application integration.
+@tool
+def lookup_order(order_id: str) -> str:
+    """Look up an order the current user is allowed to access."""
+    # Call your own service here and enforce user/resource authorization.
+    return f"Order {order_id}: example lookup result"
+
+
+@tool
+def search_internal_docs(query: str) -> str:
+    """Search the application's approved internal documentation."""
+    # Replace with your real search implementation.
+    return f"Example documentation results for: {query}"
+
+
+# Build the agent normally, including all the tools it may use.
+agent = create_agent(
+    model=ChatGroq(
+        api_key=os.environ["GROQ_API_KEY"],
+        model=os.environ["GROQ_MODEL"],
+        temperature=0,
+    ),
+    tools=[lookup_order, search_internal_docs],
+    system_prompt=(
+        "Help the user using the available tools when appropriate. "
+        "Never invent tool results. Respect authorization and tool output."
+    ),
+)
+
+# Use the authenticated application's stable user ID, not an ID trusted
+# from an unauthenticated request body.
+runtime = AgenticMemoryRuntime(
+    user_id=verified_user_id,
+    agent=agent,
+)
+
+result = runtime.run(
+    "Check order ORD-1042 and summarize its status.",
+    task_goal="Check and summarize an order",
+)
+
+print(result["answer"])
+print("Retrieved long-term memories:", result["retrieved_memory_count"])
+print("Session:", result["session_id"])
+print("Task:", result["task_id"])
+```
+
+### What the runtime adds
+
+- Calls `memori(user_id, user_input, source="user")` so relevant long-term
+  memories can be included in the agent's context.
+- Supplies relevant recent session history and the current task checkpoint.
+- Records user/assistant turns and LangChain tool start, result, and error events
+  in `agent_events`.
+- Maintains resumable task state in `agent_tasks`.
+
+Your tools still run through the LangChain agent normally. The runtime does not
+create tools, grant permissions, or automatically implement external actions.
+Each tool must validate inputs, enforce per-user access, and handle side effects
+safely. Use idempotency keys for actions that must not run twice. Secrets and
+sensitive tool output should never be returned or stored unnecessarily.
+
+### Resume a saved task
+
+Keep the same authenticated user ID and configure the same agent/tools when
+resuming. Use the task ID returned by the earlier run or listed by
+`runtime.resumable_tasks()`:
+
+```python
+runtime.resume_task("your-existing-task-id")
+result = runtime.run("Continue from the saved checkpoint.")
+print(result["answer"])
+```
+
+Resuming loads the saved task state; it does not blindly replay unfinished
+external actions. The agent and your application must decide what remains to
+be done and safely continue.
+
+For runtime options, streaming, lower-level event/task APIs, and the interactive
+harness, see [docs/AGENTIC_MEMORY.md](docs/AGENTIC_MEMORY.md).
+
 ## Cloud-backed agent workspaces
 
 Agent artifact files (for example, generated HTML, code, notes, and reports) are stored in MongoDB's `workspace_files` collection by default. This makes them available across serverless invocations and application instances on Vercel, Netlify, and other hosts, provided they can reach the configured MongoDB deployment. The files are scoped using hashed user and task keys and a validated relative path.
