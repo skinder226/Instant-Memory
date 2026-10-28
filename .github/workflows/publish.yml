@@ -50,7 +50,7 @@ jobs:
           PY
 
       - name: Install project and development dependencies
-        run: uv sync --all-groups
+        run: uv sync --python 3.12 --all-groups
 
       - name: Run tests
         run: uv run pytest -q
