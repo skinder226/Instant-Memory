@@ -922,7 +922,7 @@ def _requires_personal_name_lookup(message: str) -> bool:
 def _extract_explicit_name_fact(message: str) -> str | None:
     """Extract only an explicit 'my/may name is X' statement without an LLM call."""
     match = re.search(
-        r"\b(?:my|may)\s+name\s*(?:is|:)\s*([A-Za-z][A-Za-z'’.-]*(?:\s+[A-Za-z][A-Za-z'’.-]*){0,2})",
+        r"\b(?:my|may)\s+name\s*(?:is|:)\s*([A-Za-z][A-Za-z'’.-]*(?:\s+(?!and\b|but\b|because\b|i\b|we\b|you\b|he\b|she\b|they\b)[A-Za-z][A-Za-z'’.-]*){0,2})",
         message.strip(),
         re.IGNORECASE,
     )
