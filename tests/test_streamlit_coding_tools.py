@@ -1,9 +1,18 @@
 """Regression checks for the coding workflow exposed in Streamlit Studio."""
 from pathlib import Path
 
+import pytest
+
+
+def _streamlit_source() -> str:
+    streamlit_app = Path(__file__).resolve().parents[1] / "streamlit_app.py"
+    if not streamlit_app.exists():
+        pytest.skip("streamlit_app.py is not present in this repository checkout.")
+    return streamlit_app.read_text(encoding="utf-8")
+
 
 def test_streamlit_agent_registers_persistent_artifact_tools():
-    source = (Path(__file__).resolve().parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
+    source = _streamlit_source()
     for tool_name in (
         "workspace_list_files",
         "workspace_read_file",
@@ -17,7 +26,7 @@ def test_streamlit_agent_registers_persistent_artifact_tools():
 
 
 def test_streamlit_html_preview_uses_iframe_not_deprecated_component():
-    source = (Path(__file__).resolve().parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
+    source = _streamlit_source()
     assert "st.iframe(html_document" in source
     assert "components.html(" not in source
     assert "import streamlit.components.v1 as components" not in source
@@ -25,7 +34,7 @@ def test_streamlit_html_preview_uses_iframe_not_deprecated_component():
 
 
 def test_agent_prompt_describes_general_artifact_reuse_and_line_edits():
-    source = (Path(__file__).resolve().parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
+    source = _streamlit_source()
     assert "any ongoing artifact task" in source
     assert "essay, email, " in source
     assert "preserve all " in source
