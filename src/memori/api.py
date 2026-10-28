@@ -324,6 +324,12 @@ _USER_MEMORY_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _USER_MEMORY_CACHE_LOCK = threading.Lock()
 _USER_MEMORY_CACHE_TTL_SECONDS = 3.0
 
+# Facts captured from the latest user turn are immediately readable while the
+# asynchronous extractor persists them to MongoDB and the outbox.
+_PENDING_NAME_FACTS: dict[str, tuple[float, str]] = {}
+_PENDING_NAME_FACTS_LOCK = threading.Lock()
+_PENDING_NAME_FACT_TTL_SECONDS = 300.0
+
 
 def _get_current_user_memories(user_id: str) -> list[dict]:
     """Reuse a short-lived per-user snapshot to avoid a Mongo round-trip per turn."""
@@ -913,8 +919,47 @@ def _requires_personal_name_lookup(message: str) -> bool:
     ))
 
 
+def _extract_explicit_name_fact(message: str) -> str | None:
+    """Extract only an explicit 'my/may name is X' statement without an LLM call."""
+    match = re.search(
+        r"\\b(?:my|may)\\s+name\\s*(?:is|:)\\s*([A-Za-z][A-Za-z'’.-]*(?:\\s+[A-Za-z][A-Za-z'’.-]*){0,2})",
+        message.strip(),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    name = match.group(1).strip(" .,!?:;\\t\\r\\n")
+    if not name or name.casefold() in {"unknown", "not known", "nobody", "and", "but"}:
+        return None
+    return name
+
+
+def _remember_pending_name_fact(user_id: str, name: str) -> None:
+    """Make an explicit name statement available before background persistence finishes."""
+    with _PENDING_NAME_FACTS_LOCK:
+        _PENDING_NAME_FACTS[user_id] = (time.monotonic(), name)
+
+
+def _get_pending_name_fact(user_id: str) -> str | None:
+    with _PENDING_NAME_FACTS_LOCK:
+        pending = _PENDING_NAME_FACTS.get(user_id)
+        if not pending:
+            return None
+        created_at, name = pending
+        if time.monotonic() - created_at > _PENDING_NAME_FACT_TTL_SECONDS:
+            _PENDING_NAME_FACTS.pop(user_id, None)
+            return None
+        return name
+
+
 def _retrieve_personal_name_memories_fast(user_id: str) -> list[str]:
     """Return current profile memories that contain a name or name relationship."""
+    pending_name = _get_pending_name_fact(user_id)
+    if pending_name:
+        # This short-circuits slow Mongo/vector/graph reads for the immediate
+        # follow-up turn while the background save is still running.
+        return [f"The user's name is {pending_name}."]
+
     docs = _get_current_user_memories(user_id)
     matches = []
     for doc in docs:
@@ -1079,6 +1124,20 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
     # named person's records across temporal states rather than only current
     # project memories.
     is_question = _looks_like_question(user_input)
+
+    # An explicit name fact is cheap to recognize deterministically. Publish it
+    # to the per-user pending-fact cache immediately, then skip the extra
+    # decision-gate LLM call and let the extractor persist it in the background.
+    explicit_name = _extract_explicit_name_fact(user_input)
+    if explicit_name:
+        _remember_pending_name_fact(user_id, explicit_name)
+        _background_executor.submit(
+            _save_message_background, user_id, user_input, role, False
+        )
+        result["memory_save_scheduled"] = True
+        logger.info("RETRIEVAL_PATH user_id=%s path=immediate_name_fact", user_id)
+        return result
+
     collaborator_match = re.search(
         r"\b(?:project|working on|worked on)\b.{0,50}\bwith\s+((?-i:[A-Z])[\w.-]*)\b|"
         r"\bwith\s+((?-i:[A-Z])[\w.-]*)\b.{0,50}\b(?:project|working on|worked on)\b",
