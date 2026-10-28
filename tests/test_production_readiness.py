@@ -267,3 +267,34 @@ def test_explicit_name_statement_parser_accepts_my_and_may_typo():
     assert _extract_explicit_name_fact("My name is Skinder.") == "Skinder"
     assert _extract_explicit_name_fact("may name is skinder") == "skinder"
     assert _extract_explicit_name_fact("I like the name Skinder") is None
+
+
+
+def test_obvious_durable_facts_skip_the_decision_gate():
+    from memori.api import _is_obvious_durable_fact
+
+    assert _is_obvious_durable_fact("I work at Microsoft")
+    assert _is_obvious_durable_fact("I live in Wah Cantt")
+    assert _is_obvious_durable_fact("My project is Instant Memory")
+    assert not _is_obvious_durable_fact("Where do I work?")
+    assert not _is_obvious_durable_fact("Hello")
+    assert not _is_obvious_durable_fact("The sky is blue")
+
+
+def test_obvious_fact_uses_extractor_directly(monkeypatch):
+    import memori.api as api
+
+    scheduled = []
+    monkeypatch.setattr(
+        api._background_executor,
+        "submit",
+        lambda *args, **kwargs: scheduled.append((args, kwargs)),
+    )
+    result = api.memori("fast-save-user", "I work at Microsoft", source="user")
+
+    assert result["memory_save_scheduled"] is True
+    assert len(scheduled) == 1
+    assert scheduled[0][0][0] is api._save_message_background
+    assert scheduled[0][0][1:] == (
+        "fast-save-user", "I work at Microsoft", "user", False
+    )
