@@ -823,7 +823,8 @@ def _save_message_background(user_id: str, user_input: str, role: str,
         if response.memories or repaired_existing_project:
             # Mongo memory + outbox are already durable. Do not hold up the
             # ingestion worker while remote vector/graph projections are synced.
-            _sync_executor.submit(save_pending_memory, user_id)
+            sync_future = _sync_executor.submit(save_pending_memory, user_id)
+            sync_future.add_done_callback(_log_background_future)
 
         if response.placeholder_updates:
             now = datetime.now(timezone.utc).isoformat()
