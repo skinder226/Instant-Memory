@@ -93,6 +93,22 @@ def test_memori_retrieves_name_for_common_typo_may_name(monkeypatch):
     assert result["memory_save_scheduled"] is False
 
 
+def test_personal_name_lookup_falls_back_to_hybrid_retrieval(monkeypatch):
+    import sys
+    import types
+    import memori.api as api
+
+    monkeypatch.setattr(api, "_get_current_user_memories", lambda user_id: [])
+    hybrid = types.SimpleNamespace(
+        retrieve_memory=lambda query, user_id: ["Skinder is the user's name."]
+    )
+    monkeypatch.setitem(sys.modules, "memori.retival_worker", hybrid)
+
+    result = api._retrieve_personal_name_memories_fast("test-user")
+
+    assert result == ["Skinder is the user's name."]
+
+
 def test_memori_non_user_source_returns_dict_without_retrieval(monkeypatch):
     import memori.api as api
     scheduled = []
