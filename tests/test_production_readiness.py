@@ -89,8 +89,9 @@ def test_memori_non_user_source_returns_dict_without_retrieval(monkeypatch):
     assert isinstance(result, dict)
     assert result["source"] == "assistant"
     assert result["retrieval"] == []
-    assert result["memory_save_scheduled"] is True
-    assert scheduled
+    # Assistant/tool/system messages are read-only to avoid duplicate memories.
+    assert result["memory_save_scheduled"] is False
+    assert scheduled == []
 
 
 def test_list_agent_tasks_includes_completed_tasks_and_is_user_scoped(monkeypatch):
