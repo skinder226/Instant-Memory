@@ -976,20 +976,11 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         "memory_save_scheduled": False,
     }
 
-    if role == "assistant":
-        # Assistant messages skip retrieval, but still pass through extraction.
-        # source_role lets downstream consumers distinguish generated content.
-        _background_executor.submit(
-            _save_message_background, user_id, user_input, role, True,
-        )
-        result["memory_save_scheduled"] = True
-        return result
-
+    # Only caller-supplied user messages may create personal memories.
+    # Saving assistant/tool/system output caused the same fact to be extracted
+    # twice (once from the user and again from the assistant), creating duplicate
+    # Mongo documents and duplicate outbox events. Non-user sources are read-only.
     if role != "user":
-        _background_executor.submit(
-            _save_message_background, user_id, user_input, role, True,
-        )
-        result["memory_save_scheduled"] = True
         return result
 
     # Greetings, acknowledgements, and general knowledge questions should not
