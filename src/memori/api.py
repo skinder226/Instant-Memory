@@ -887,12 +887,66 @@ _GREETING_RE = re.compile(
     re.IGNORECASE,
 )
 _PERSONAL_MEMORY_INTENT_RE = re.compile(
+    r"\b(?:my|may)\s+name\b|"
     r"\b(?:my|mine|me|our|ours|remember|recall|previous|previously|before|"
     r"last time|earlier|history|historical|memory|memories|project|employer|"
     r"workplace|work|working|employed|company|job|career|friend|colleague|knows me|what did i ask|"
     r"what have i told you|what do you know about me|task|website did i ask)\b",
     re.IGNORECASE,
 )
+
+
+def _requires_personal_name_lookup(message: str) -> bool:
+    """Recognize direct questions asking for the user's saved name."""
+    text = message.strip()
+    return bool(re.search(
+        r"\b(?:what|tell me|remind me of|remember)\b.{0,30}\b(?:my|may)\s+name\b|"
+        r"\b(?:who am i|what is the user's name)\b",
+        text,
+        re.IGNORECASE,
+    ))
+
+
+def _retrieve_personal_name_memories_fast(user_id: str) -> list[str]:
+    """Return current profile memories that contain a name or name relationship."""
+    docs = _get_current_user_memories(user_id)
+    matches = []
+    for doc in docs:
+        content = str(doc.get("content") or "")
+        entities = doc.get("entities") or []
+        is_profile = str(doc.get("type") or "").lower() == "profile"
+        name_relation = any(
+            isinstance(entity, dict)
+            and str(entity.get("relationship") or "").strip().lower()
+                in {"named", "has_name", "name_is", "called"}
+            for entity in entities
+        )
+        content_mentions_name = bool(re.search(
+            r"\b(?:my|the user's|user's)\s+name\s+(?:is|:)|\bname\s*:",
+            content,
+            re.IGNORECASE,
+        ))
+        if content and (name_relation or content_mentions_name or (is_profile and re.search(
+            r"\b(?:name|called)\b", content, re.IGNORECASE
+        ))):
+            matches.append((
+                0 if name_relation or content_mentions_name else 1,
+                str((doc.get("temporal") or {}).get("valid_from") or ""),
+                content,
+            ))
+    matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    results, seen = [], set()
+    for _, _, content in matches:
+        if content not in seen:
+            results.append(content)
+            seen.add(content)
+        if len(results) >= 5:
+            break
+    logger.info(
+        "RETRIEVAL_TIMING user_id=%s path=personal_name total_ms=0 result_count=%d",
+        user_id, len(results),
+    )
+    return results
 
 
 def _is_low_value_chat_turn(message: str) -> bool:
@@ -1054,6 +1108,19 @@ def memori(user_id: str, user_input: str, source: str = "user") -> dict:
         result["retrieval"] = _retrieve_project_memories_fast(user_id)
         logger.info(
             "RETRIEVAL_TIMING user_id=%s path=project_fast total_ms=%.2f result_count=%d",
+            user_id, (time.perf_counter() - fast_started) * 1000,
+            len(result["retrieval"]),
+        )
+        return result
+
+    # A direct question about the user's name must read stored profile facts.
+    # Accept "may name" as a common typo for "my name"; do not send this question
+    # to the low-value early return or the background memory-saving path.
+    if is_question and _requires_personal_name_lookup(user_input):
+        fast_started = time.perf_counter()
+        result["retrieval"] = _retrieve_personal_name_memories_fast(user_id)
+        logger.info(
+            "RETRIEVAL_TIMING user_id=%s path=personal_name total_ms=%.2f result_count=%d",
             user_id, (time.perf_counter() - fast_started) * 1000,
             len(result["retrieval"]),
         )
