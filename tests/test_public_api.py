@@ -50,7 +50,7 @@ def test_compact_extractor_prompt_is_small_and_has_core_rules():
     assert "source_role" in prompt
 
 
-def test_ai_source_skips_retrieval_but_schedules_background_save(monkeypatch):
+def test_ai_source_is_not_saved_or_retrieved(monkeypatch):
     from memori import api
 
     scheduled = []
@@ -63,10 +63,25 @@ def test_ai_source_skips_retrieval_but_schedules_background_save(monkeypatch):
     result = api.memori("tenant-a", "The assistant summarized a saved preference.", source="ai")
 
     assert result["retrieval"] == []
-    assert result["memory_save_scheduled"] is True
-    assert len(scheduled) == 1
-    assert scheduled[0][0] is api._save_message_background
-    assert scheduled[0][1][2] == "assistant"
+    assert result["memory_save_scheduled"] is False
+    assert scheduled == []
+
+
+def test_tool_source_is_not_saved_or_retrieved(monkeypatch):
+    from memori import api
+
+    scheduled = []
+    monkeypatch.setattr(
+        api._background_executor,
+        "submit",
+        lambda fn, *args, **kwargs: scheduled.append((fn, args, kwargs)),
+    )
+
+    result = api.memori("tenant-a", "Tool output mentions Microsoft.", source="tool")
+
+    assert result["retrieval"] == []
+    assert result["memory_save_scheduled"] is False
+    assert scheduled == []
 
 
 def test_oversized_decision_prompt_falls_back_to_extractor(monkeypatch):
