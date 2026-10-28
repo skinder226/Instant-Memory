@@ -81,6 +81,18 @@ def test_memori_question_returns_dict_and_retrieves(monkeypatch):
     assert result["memory_save_scheduled"] is False
 
 
+def test_memori_retrieves_name_for_common_typo_may_name(monkeypatch):
+    import memori.api as api
+
+    expected = ["My name is Skinder."]
+    monkeypatch.setattr(api, "_retrieve_personal_name_memories_fast", lambda user_id: expected)
+
+    result = api.memori("test-user", "What is may name", source="user")
+
+    assert result["retrieval"] == expected
+    assert result["memory_save_scheduled"] is False
+
+
 def test_memori_non_user_source_returns_dict_without_retrieval(monkeypatch):
     import memori.api as api
     scheduled = []
