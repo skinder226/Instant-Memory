@@ -948,6 +948,32 @@ def _retrieve_personal_name_memories_fast(user_id: str) -> list[str]:
             seen.add(content)
         if len(results) >= 5:
             break
+    # The Mongo fast path intentionally has strict name/profile matching.
+    # If the name is represented only as a graph fact or semantic memory whose
+    # prose does not contain the word "name", use the full hybrid retrieval
+    # pipeline (Pinecone + Neo4j, resolved back to this user's Mongo documents).
+    if not results:
+        try:
+            from .retival_worker import retrieve_memory
+
+            logger.info(
+                "RETRIEVAL_PATH user_id=%s path=personal_name_hybrid_fallback",
+                user_id,
+            )
+            hybrid_results = retrieve_memory(
+                "What is my name? Retrieve the user's own stored name/profile fact.",
+                user_id,
+            )
+            results = [
+                str(item) for item in (hybrid_results or [])
+                if isinstance(item, str) and item.strip()
+            ]
+        except Exception:
+            logger.exception(
+                "Hybrid name retrieval failed for user_id=%s",
+                user_id,
+            )
+
     logger.info(
         "RETRIEVAL_TIMING user_id=%s path=personal_name total_ms=0 result_count=%d",
         user_id, len(results),
