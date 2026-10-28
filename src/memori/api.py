@@ -584,6 +584,12 @@ def _save_memories_and_outbox(db: Any, memories_data: list[dict], user_id: str) 
         db["memories"].insert_many(memory_docs, ordered=True)
     if outbox_docs:
         db["outbox"].insert_many(outbox_docs, ordered=True)
+
+    # A retrieval snapshot may have been cached before this write. Invalidate
+    # it immediately so the next question can see newly persisted facts.
+    with _USER_MEMORY_CACHE_LOCK:
+        _USER_MEMORY_CACHE.pop(user_id, None)
+
     return output_ids
 
 def _save_memory_and_outbox(db: Any, memory_data: dict, user_id: str) -> tuple[str, str]:
