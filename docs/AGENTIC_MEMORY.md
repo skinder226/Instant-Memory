@@ -286,6 +286,7 @@ The factory registers these tools:
 - `write_project_file(path, content)`
 - `edit_project_file_lines(path, start_line, end_line, replacement)`
 - `delete_project_file(path)`
+- `list_saved_messages()`
 - `read_saved_message(path, start_line?, end_line?)`
 - `delete_saved_message(path)`
 
