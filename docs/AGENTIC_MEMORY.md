@@ -96,8 +96,12 @@ to import or register a recovery tool. On the next turn, the runtime checks for 
 failed response belonging to the same authenticated user, session, and task,
 marks it as recovering, and adds its partial output and unfinished file drafts to
 the agent context with instructions to continue rather than restart. A successful
-subsequent turn marks that recovery as `recovered`. Keep the same `user_id`,
-`session_id`, and `task_id` when resuming the same task.
+subsequent turn marks that recovery as `recovered`. Keep the same `user_id`
+and `session_id` for every message in one chat. When `task_id` is omitted, the
+runtime now looks up and reuses the latest task in that user/session (including
+completed tasks), so an app can recreate the runtime between turns without silently
+starting a new task. An explicitly supplied `task_id` still takes precedence. A
+new chat must receive a new session ID; never share session IDs across users or chats.
 
 The runtime always attaches a token-capture callback. To preserve partial text,
 the underlying chat model/provider must itself have streaming enabled and emit
@@ -136,7 +140,11 @@ For file generation, the agent can include explicit blocks in its final response
 The runtime instructs the agent to wrap each generated file in the exact
 `## Create File (relative/path.ext)` and `## Ending file (relative/path.ext)`
 markers. It parses and saves complete blocks to the `workspace_files` collection
-after the model finishes; it does not write files while tokens are streaming.
+after the model finishes; it does not write files while tokens are streaming. On
+every subsequent turn it lists and reads the current task's saved workspace files
+and injects their paths and contents into the agent context (bounded to 30 files and
+24,000 characters). This lets follow-up requests such as “change the header” operate
+on the saved project instead of asking the user to paste code.
 For compatibility, a single Markdown code block is also saved when the response
 explicitly says which filename to save it as (for example, "Save this as
 `calculator.html`"). Unlabelled code examples are not treated as files.
