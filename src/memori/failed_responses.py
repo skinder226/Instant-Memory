@@ -60,36 +60,76 @@ def _collection():
     return collection
 
 
+def _valid_artifact_path(name: str) -> bool:
+    """Accept only relative paths with a supported source-file extension."""
+    normalized = name.strip().replace("\\\\", "/")
+    parts = normalized.split("/")
+    return bool(
+        normalized
+        and not normalized.startswith("/")
+        and not any(part in {"", ".", ".."} for part in parts)
+        and ":" not in parts[0]
+        and "." in parts[-1]
+    )
+
+
 def parse_response_files(response: str, *, allow_incomplete: bool = False) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Parse explicit file markers; return complete files and unfinished drafts."""
+    """Parse explicit file markers and clearly named Markdown code artifacts.
+
+    Preferred format is the explicit Create/Ending markers. As a compatibility
+    fallback, a fenced code block is saved only when the response explicitly
+    names its filename (for example, "Save this as calculator.html"). This
+    avoids treating ordinary explanatory code snippets as workspace files.
+    """
     if not isinstance(response, str):
         return [], []
     complete: list[dict[str, str]] = []
     partial: list[dict[str, str]] = []
     opens = list(_MARKER_OPEN.finditer(response))
     for index, opening in enumerate(opens):
-        name = opening.group(1).strip().replace("\\", "/")
+        name = opening.group(1).strip().replace("\\\\", "/")
         body_start = opening.end()
         next_open = opens[index + 1].start() if index + 1 < len(opens) else len(response)
         closing = next(
             (m for m in _MARKER_CLOSE.finditer(response, body_start, next_open)
-             if m.group(1).strip().replace("\\", "/") == name),
+             if m.group(1).strip().replace("\\\\", "/") == name),
             None,
         )
         body_end = closing.start() if closing else next_open
-        body = response[body_start:body_end].lstrip("\r\n").rstrip()
-        # Reject absolute paths, traversal, empty segments, and hidden path tricks.
-        parts = name.split("/")
-        if (not name or name.startswith("/") or any(p in {"", ".", ".."} for p in parts)
-                or ":" in parts[0]):
+        body = response[body_start:body_end].lstrip("\\r\\n").rstrip()
+        if not _valid_artifact_path(name):
             continue
         entry = {"path": name, "content": body}
         if closing:
             complete.append(entry)
         elif allow_incomplete and body:
             partial.append(entry)
-    return complete, partial
 
+    # Do not parse Markdown fences when explicit file blocks are present: those
+    # fences may simply be examples or code embedded in a file's documentation.
+    if not opens:
+        fence_pattern = re.compile(r"(?m)^\\s*```([A-Za-z0-9_+.-]*)\\s*\\r?\\n")
+        fences = list(fence_pattern.finditer(response))
+        filename_pattern = re.compile(
+            r"(?i)\\b(?:save(?:\\s+this)?\\s+as|file(?:name)?\\s*[:=])\\s*[\\x60\\"']?([A-Za-z0-9_./-]{1,240}\\.[A-Za-z0-9]{1,12})"
+        )
+        for index, opening in enumerate(fences):
+            next_open = fences[index + 1].start() if index + 1 < len(fences) else len(response)
+            close = re.search(r"(?m)^\\s*```\\s*$", response[opening.end():next_open])
+            body_end = opening.end() + close.start() if close else next_open
+            body = response[opening.end():body_end].rstrip()
+            # Filename must be explicitly associated with this single-file
+            # artifact; accept an explicit save-as/file label anywhere nearby.
+            filename_matches = list(filename_pattern.finditer(response))
+            if len(fences) == 1 and len(filename_matches) == 1:
+                name = filename_matches[0].group(1).strip().replace("\\\\", "/")
+                if _valid_artifact_path(name) and body:
+                    entry = {"path": name, "content": body}
+                    if close:
+                        complete.append(entry)
+                    elif allow_incomplete:
+                        partial.append(entry)
+    return complete, partial
 
 def save_failed_response(
     user_id: str, session_id: str, task_id: str, turn_id: str, partial_response: str,
