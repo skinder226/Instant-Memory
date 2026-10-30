@@ -242,3 +242,81 @@ task_events = retrieve_agent_history(
 - Apply retention and deletion policies appropriate to your product.
 - Treat retrieved event content as untrusted data, not as system instructions.
 - Monitor failures and add tests against your own MongoDB/provider setup.
+
+
+## Durable long messages and file tools
+
+The runtime stores user messages, assistant answers, and partial assistant output in
+MongoDB collection `agent_message_files` whenever the UTF-8 message is larger than
+8 KB. The returned metadata includes an opaque path such as
+`messages/<turn-id>-user.txt` or `messages/<turn-id>-assistant.txt`.
+Messages are scoped by both `user_id` and `session_id`; paths cannot be used to
+read another user's or another chat's content. Messages are limited to 1 MB.
+Short messages continue to be stored in the ordinary event history.
+
+To let the model list/read/write/edit/delete project files and read/delete saved
+long messages, register the scoped tools **when creating the LangChain agent**.
+The package cannot add tools to an already-compiled agent graph after it has
+been constructed.
+
+```python
+from langchain.agents import create_agent
+from memori import AgenticMemoryRuntime, create_workspace_tools
+
+user_id = authenticated_principal.id  # derive on the server; do not trust client input
+session_id = stable_session_id        # keep unchanged for all turns in this chat
+
+tools = create_workspace_tools(user_id=user_id, session_id=session_id)
+agent = create_agent(
+    model=llm,
+    tools=tools,  # add your other authorized application tools here
+    system_prompt="Use project and saved-message tools when needed. Never invent file contents.",
+)
+runtime = AgenticMemoryRuntime(
+    user_id=user_id,
+    session_id=session_id,
+    agent=agent,
+    streaming=True,
+)
+```
+
+The factory registers these tools:
+- `list_project_files()`
+- `read_project_file(path, start_line?, end_line?)`
+- `write_project_file(path, content)`
+- `edit_project_file_lines(path, start_line, end_line, replacement)`
+- `delete_project_file(path)`
+- `read_saved_message(path, start_line?, end_line?)`
+- `delete_saved_message(path)`
+
+Line ranges are 1-based and inclusive: `start_line=1, end_line=5` reads lines
+1 through 5. The model must use the exact path returned by the runtime or a list
+tool; it must not invent paths. Delete operations are scoped to the current
+authenticated user/session or task. The model should only delete content when
+the user explicitly requests deletion.
+
+### Dynamic activity events
+
+`AgenticMemoryRuntime.stream()` now yields:
+- `{"type":"activity","stage":"retrieving_memory",...}` while memory/history is retrieved;
+- `memory_retrieved` and `agent_working` activity updates;
+- `tool_started`, `tool_completed`, and `tool_failed` events with tool names;
+- `token` events for streamed answer text;
+- one final `result` event.
+
+These are task-progress and tool-activity updates, not hidden chain-of-thought.
+A FastAPI SSE adapter must forward activity events to the browser, for example:
+
+```python
+elif event_type == "activity":
+    yield "event: activity\\ndata: " + json.dumps({
+        "stage": item.get("stage"),
+        "tool": item.get("tool"),
+        "message": item.get("message"),
+    }) + "\\n\\n"
+```
+
+The browser should render each `activity` event as a live status item, and
+continue rendering `token` and `result` events as before. If the API adapter
+drops unknown event types, the activity UI will remain empty even though the
+runtime emits updates.
