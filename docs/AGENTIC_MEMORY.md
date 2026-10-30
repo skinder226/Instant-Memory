@@ -82,6 +82,74 @@ print("Retrieved memories:", result["retrieved_memory_count"])
 
 `AgenticMemoryRuntime.run()` returns a dictionary containing `answer`, session/task/turn IDs, retrieved-memory count, background-save scheduling status, and any semantic retrieval error. Use a verified authenticated user ID; never trust a tenant ID supplied by an unauthenticated client.
 
+## Failed response recovery and generated files
+
+Successful assistant answers continue to be stored in `agent_events`. An interrupted
+turn is additionally stored in the separate MongoDB `failed_responses` collection.
+The record contains the authenticated `user_id`, session/task/turn IDs, partial
+response text, error details, status, timestamps, unfinished file drafts, and
+recovery-attempt history. The unique `(user_id, turn_id)` index prevents duplicate
+records for the same failed turn.
+
+When streaming is enabled, the runtime collects tokens even if no UI token callback
+is supplied. If the model/provider raises (including token-limit and API errors),
+the collected partial text and any unfinished marked file blocks are saved. This
+write is best-effort: a MongoDB failure is logged and does not replace the original
+model/provider exception.
+
+To let the agent recover its own failed output, add the scoped recovery tool when
+constructing the agent. The factory closes over the authenticated user, task, and
+session IDs; the model cannot choose another user's scope:
+
+```python
+from langchain.agents import create_agent
+from langchain_groq import ChatGroq
+from memori import AgenticMemoryRuntime, create_failed_response_recovery_tool
+
+user_id = authenticated_principal.id  # obtain from your verified auth layer
+session_id = "your-session-id"
+task_id = "your-task-id"
+
+recovery_tool = create_failed_response_recovery_tool(
+    user_id=user_id, session_id=session_id, task_id=task_id
+)
+agent = create_agent(
+    model=ChatGroq(api_key="...", model="YOUR_TOOL_CALLING_MODEL", temperature=0),
+    tools=[recovery_tool],  # include your other explicitly authorized tools too
+    system_prompt="When continuing interrupted work, call recover_failed_response first.",
+)
+runtime = AgenticMemoryRuntime(
+    user_id=user_id, session_id=session_id, task_id=task_id, agent=agent,
+    streaming=True,
+)
+```
+
+The recovery tool returns the prior partial output and unfinished file drafts. The
+agent must continue from that point, verify its work, and only then complete the
+task. A successful subsequent runtime turn changes the recovery record to
+`recovered`; until then it remains `recovering`. The record is retained for
+audit/recovery rather than deleted.
+
+### Marker-based file output
+
+For file generation, the agent can include explicit blocks in its final response:
+
+```text
+## Create File (index.html)
+<!doctype html>
+<html>
+  <body>Hello</body>
+</html>
+## Ending file (index.html)
+```
+
+The runtime parses and saves complete blocks to the task's existing
+`workspace_files` storage after the model finishes. It does not write files while
+tokens are streaming. If generation fails mid-block, the unfinished content is
+preserved in `failed_responses.partial_files` for recovery; it is not exposed as
+a completed workspace file. File paths are checked to reject absolute paths and
+directory traversal. Existing workspace read/edit/list operations remain separate.
+
 ## Interactive example
 
 Run the interactive integration harness from the repository root:
