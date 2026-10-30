@@ -69,8 +69,12 @@ class _FakeCollection:
                 return False
         return True
 
-    def find_one(self, query, projection=None):
-        doc = next((d for d in self.documents if self._matches(d, query)), None)
+    def find_one(self, query, projection=None, sort=None):
+        matches = [d for d in self.documents if self._matches(d, query)]
+        if sort:
+            for key, order in reversed(sort):
+                matches.sort(key=lambda item: item.get(key) or "", reverse=order < 0)
+        doc = matches[0] if matches else None
         if doc is None:
             return None
         if projection and projection.get("_id") == 0:
@@ -185,3 +189,27 @@ def test_cross_session_episodic_search_is_user_scoped(fake_db):
 
     assert len(results) == 1
     assert results[0]["event_id"] == "event-old"
+
+def test_latest_active_task_is_reused_only_within_the_same_user_session(fake_db):
+    agentic_memory.save_agent_task(
+        "user-1", "old-task", goal="Old work", status="paused",
+        session_id="chat-1",
+    )
+    agentic_memory.save_agent_task(
+        "user-1", "new-task", goal="Website project", status="running",
+        session_id="chat-1",
+    )
+    agentic_memory.save_agent_task(
+        "user-1", "other-chat-task", goal="Different chat", status="running",
+        session_id="chat-2",
+    )
+    agentic_memory.save_agent_task(
+        "user-2", "private-task", goal="Other user", status="running",
+        session_id="chat-1",
+    )
+
+    active = agentic_memory.find_latest_active_agent_task("user-1", "chat-1")
+
+    assert active["task_id"] == "new-task"
+    assert agentic_memory.find_latest_active_agent_task("user-1", "chat-2")["task_id"] == "other-chat-task"
+    assert agentic_memory.find_latest_active_agent_task("user-2", "chat-1")["task_id"] == "private-task"
