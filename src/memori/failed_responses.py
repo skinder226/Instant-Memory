@@ -106,7 +106,7 @@ def parse_response_files(response: str, *, allow_incomplete: bool = False) -> tu
 
     # Do not mistake code examples inside explicit file blocks for extra files.
     if not opens:
-        fence_pattern = re.compile(r"(?m)^\s*\x60{3}([A-Za-z0-9_+.-]*)\s*\r?\n")
+        fence_pattern = re.compile(r"(?m)^\s*\x60{3}([A-Za-z0-9_+.-]+)\s*\r?\n")
         fences = list(fence_pattern.finditer(response))
         filename_pattern = re.compile(
             r"(?i)\b(?:save(?:\s+this)?\s+as|file(?:name)?\s*[:=])\s*[^\w./-]*([\w./-]{1,240}\.[A-Za-z0-9]{1,12})"
