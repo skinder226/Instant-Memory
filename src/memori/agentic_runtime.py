@@ -492,6 +492,7 @@ class AgenticMemoryRuntime:
             # compatibility fallback for older/model-generated response formats.
             complete_files, _ = parse_response_files(answer)
             saved_artifacts: list[dict[str, Any]] = []
+            artifact_save_errors: list[dict[str, str]] = []
             for artifact in complete_files:
                 try:
                     saved = write_workspace_file(
@@ -499,6 +500,10 @@ class AgenticMemoryRuntime:
                     )
                     saved_artifacts.append(saved)
                 except Exception:
+                    artifact_save_errors.append({
+                        "path": artifact["path"],
+                        "error": "Workspace write failed; inspect the server log for details.",
+                    })
                     logger.exception(
                         "Could not persist generated workspace artifact (user_id=%s, path=%s)",
                         self.user_id, artifact["path"],
@@ -547,6 +552,7 @@ class AgenticMemoryRuntime:
                 "answer": answer, "user_id": self.user_id, "session_id": self.session_id,
                 "task_id": self.task_id, "turn_id": turn_id,
                 "workspace_files": saved_artifacts,
+                "workspace_file_errors": artifact_save_errors,
                 "retrieved_memory_count": len(long_term),
                 "memory_save_scheduled": memory_result.get("memory_save_scheduled", False)
                     if memory_error is None else False,
