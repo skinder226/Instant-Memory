@@ -151,7 +151,11 @@ The runtime parses and saves complete blocks to the task's existing
 tokens are streaming. If generation fails mid-block, the unfinished content is
 preserved in `failed_responses.partial_files` for recovery; it is not exposed as
 a completed workspace file. File paths are checked to reject absolute paths and
-directory traversal. Existing workspace read/edit/list operations remain separate.
+directory traversal. Existing workspace read/edit/list operations remain
+available, and `delete_workspace_file(user_id, task_id, path)` provides scoped
+deletion. By default, the existing workspace backend stores file content in
+MongoDB's `workspace_files` collection; pass `base_dir` to the workspace
+functions when you explicitly want local filesystem storage.
 
 ## Interactive example
 
