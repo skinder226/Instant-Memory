@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
+import re
 
 _indexes_ready = False
 _indexes_lock = Lock()
@@ -56,8 +57,8 @@ def save_agent_message_file(
     user_id, session_id = _validate_scope(user_id, session_id)
     if not isinstance(task_id, str) or not task_id.strip():
         raise ValueError("task_id must be a non-empty string.")
-    if not isinstance(turn_id, str) or not turn_id.strip():
-        raise ValueError("turn_id must be a non-empty string.")
+    if not isinstance(turn_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", turn_id):
+        raise ValueError("turn_id must contain only letters, numbers, underscores, or hyphens.")
     if role not in {"user", "assistant", "assistant_partial"}:
         raise ValueError("role must be user, assistant, or assistant_partial.")
     if not isinstance(content, str):
