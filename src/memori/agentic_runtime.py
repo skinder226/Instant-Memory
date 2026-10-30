@@ -124,6 +124,7 @@ class _ToolEventRecorder(BaseCallbackHandler):
         self.runtime = runtime
         self.turn_id = turn_id
         self.on_progress = on_progress
+        self.tool_names: dict[str, str] = {}
 
     def _emit(self, event: dict[str, Any]) -> None:
         if self.on_progress is not None:
@@ -131,7 +132,6 @@ class _ToolEventRecorder(BaseCallbackHandler):
                 self.on_progress(event)
             except Exception:
                 logger.debug("Progress callback failed", exc_info=True)
-        self.tool_names: dict[str, str] = {}
 
     def on_tool_start(
         self, serialized: dict[str, Any], input_str: str, *,
@@ -719,7 +719,7 @@ class AgenticMemoryRuntime:
     def stream(
         self, user_input: str, *, task_goal: str | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield token events followed by one final result event."""
+        """Yield activity, token, and final result events; never expose hidden reasoning."""
         if not self.streaming:
             raise RuntimeError(
                 "Streaming is disabled. Construct AgenticMemoryRuntime(..., streaming=True)."
