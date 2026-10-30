@@ -31,6 +31,7 @@ from .failed_responses import (
     mark_failed_response_recovery,
 )
 from .code_workspace import list_workspace_files, read_workspace_file, write_workspace_file
+from .message_files import save_agent_message_file
 from .api import memori
 
 logger = logging.getLogger(__name__)
@@ -119,9 +120,17 @@ def _redact(value: Any, *, key: str = "") -> Any:
 class _ToolEventRecorder(BaseCallbackHandler):
     """Record LangChain tool execution without storing unbounded payloads."""
 
-    def __init__(self, runtime: "AgenticMemoryRuntime", turn_id: str):
+    def __init__(self, runtime: "AgenticMemoryRuntime", turn_id: str, on_progress: Callable[[dict[str, Any]], None] | None = None):
         self.runtime = runtime
         self.turn_id = turn_id
+        self.on_progress = on_progress
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        if self.on_progress is not None:
+            try:
+                self.on_progress(event)
+            except Exception:
+                logger.debug("Progress callback failed", exc_info=True)
         self.tool_names: dict[str, str] = {}
 
     def on_tool_start(
@@ -132,6 +141,7 @@ class _ToolEventRecorder(BaseCallbackHandler):
         tool_name = str((serialized or {}).get("name") or "unknown_tool")
         call_id = str(run_id)
         self.tool_names[call_id] = tool_name
+        self._emit({"type": "activity", "stage": "tool_started", "tool": tool_name, "message": f"Using {tool_name}"})
         self.runtime._event(
             turn_id=self.turn_id, role="assistant", event_type="tool_call",
             content=f"Calling tool {tool_name}",
@@ -146,6 +156,7 @@ class _ToolEventRecorder(BaseCallbackHandler):
         call_id = str(run_id)
         tool_name = self.tool_names.pop(call_id, "unknown_tool")
         safe_output = _json_text(_redact(output), 8000)
+        self._emit({"type": "activity", "stage": "tool_completed", "tool": tool_name, "message": f"Finished {tool_name}"})
         self.runtime._event(
             turn_id=self.turn_id, role="tool", event_type="tool_result",
             content=f"Tool {tool_name} completed: {safe_output[:1500]}",
@@ -159,6 +170,7 @@ class _ToolEventRecorder(BaseCallbackHandler):
     ) -> None:
         call_id = str(run_id)
         tool_name = self.tool_names.pop(call_id, "unknown_tool")
+        self._emit({"type": "activity", "stage": "tool_failed", "tool": tool_name, "message": f"{tool_name} failed"})
         self.runtime._event(
             turn_id=self.turn_id, role="tool", event_type="tool_result",
             content=f"Tool {tool_name} failed: {type(error).__name__}",
@@ -298,6 +310,7 @@ class AgenticMemoryRuntime:
     def run(
         self, user_input: str, *, task_goal: str | None = None,
         on_token: Callable[[str], None] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """Run one turn and return answer plus memory/task metadata."""
         if not isinstance(user_input, str) or not user_input.strip():
@@ -305,7 +318,21 @@ class AgenticMemoryRuntime:
         user_input = user_input.strip()
         turn_id = f"turn-{uuid.uuid4().hex}"
         self._active_turn_id = turn_id
-        self._event(turn_id=turn_id, role="user", event_type="message", content=user_input)
+        saved_user_message = None
+        if len(user_input.encode("utf-8")) > 8_000:
+            try:
+                saved_user_message = save_agent_message_file(
+                    self.user_id, self.session_id, self.task_id, turn_id, "user", user_input
+                )
+            except Exception:
+                logger.exception("Could not persist oversized user message (turn_id=%s)", turn_id)
+        event_content = user_input if len(user_input) <= 50_000 else (
+            f"[Long user message saved at {saved_user_message['path']}]"
+            if saved_user_message else "[Long user message could not be saved]"
+        )
+        self._event(turn_id=turn_id, role="user", event_type="message", content=event_content)
+        if on_progress:
+            on_progress({"type": "activity", "stage": "retrieving_memory", "message": "Retrieving relevant memories and conversation context"})
 
         # Initialize every value before entering the retrieval call. A retrieval
         # failure must never leave context assembly with an unbound local.
@@ -322,6 +349,8 @@ class AgenticMemoryRuntime:
             memory_result = raw_memory_result
             retrieved = memory_result.get("retrieval", [])
             long_term = retrieved if isinstance(retrieved, list) else []
+            if on_progress:
+                on_progress({"type": "activity", "stage": "memory_retrieved", "message": f"Retrieved {len(long_term)} relevant memories"})
         except Exception as exc:
             # Retrieval is best-effort: the agent should still answer with the
             # session/task context even when the memory API fails.
@@ -437,6 +466,8 @@ class AgenticMemoryRuntime:
             )
 
         prompt_context: dict[str, Any] = {"long_term_memories": long_term}
+        if saved_user_message:
+            prompt_context["saved_user_message"] = saved_user_message
         if recovery_context:
             prompt_context["failed_response_recovery"] = recovery_context
         if workspace_context:
@@ -512,7 +543,9 @@ class AgenticMemoryRuntime:
                 "prompt": prompt[:10_000],
             },
         )
-        recorder = _ToolEventRecorder(self, turn_id)
+        if on_progress:
+            on_progress({"type": "activity", "stage": "agent_working", "message": "Working on your request"})
+        recorder = _ToolEventRecorder(self, turn_id, on_progress=on_progress)
         partial_tokens: list[str] = []
         try:
             callbacks = [recorder, _TokenCallback(partial_tokens, on_token)]
@@ -539,6 +572,14 @@ class AgenticMemoryRuntime:
                     None,
                 )
             answer = str(getattr(final_message, "content", "")) if final_message else _json_text(result)
+            saved_assistant_message = None
+            if len(answer.encode("utf-8")) > 8_000:
+                try:
+                    saved_assistant_message = save_agent_message_file(
+                        self.user_id, self.session_id, self.task_id, turn_id, "assistant", answer
+                    )
+                except Exception:
+                    logger.exception("Could not persist oversized assistant message (turn_id=%s)", turn_id)
             # Save complete artifacts only after generation ends. The parser accepts
             # explicit markers and a single explicitly named Markdown file as a
             # compatibility fallback for older/model-generated response formats.
@@ -605,6 +646,8 @@ class AgenticMemoryRuntime:
                 "task_id": self.task_id, "turn_id": turn_id,
                 "workspace_files": saved_artifacts,
                 "workspace_file_errors": artifact_save_errors,
+                "saved_user_message": saved_user_message,
+                "saved_assistant_message": saved_assistant_message,
                 "loaded_workspace_files": [
                     {"path": item["path"], "bytes": len(item["content"].encode("utf-8"))}
                     for item in workspace_context
@@ -619,6 +662,11 @@ class AgenticMemoryRuntime:
             # Persistence is best-effort and must never hide the original exception.
             partial_response = "".join(partial_tokens)
             try:
+                if len(partial_response.encode("utf-8")) > 8_000:
+                    save_agent_message_file(
+                        self.user_id, self.session_id, self.task_id,
+                        turn_id, "assistant_partial", partial_response,
+                    )
                 complete_files, partial_files = parse_response_files(
                     partial_response, allow_incomplete=True
                 )
@@ -681,9 +729,15 @@ class AgenticMemoryRuntime:
         def emit(token: str) -> None:
             events.put({"type": "token", "content": token})
 
+        def progress(event: dict[str, Any]) -> None:
+            events.put(event)
+
         def worker() -> None:
             try:
-                result = self.run(user_input, task_goal=task_goal, on_token=emit)
+                result = self.run(
+                    user_input, task_goal=task_goal,
+                    on_token=emit, on_progress=progress,
+                )
                 events.put({"type": "result", "result": result})
             except BaseException as exc:
                 events.put({"type": "error", "error": exc})
