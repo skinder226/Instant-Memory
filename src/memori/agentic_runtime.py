@@ -23,6 +23,12 @@ from .agentic_memory import (
     save_agent_task,
     search_agent_events,
 )
+from .failed_responses import (
+    parse_response_files,
+    save_failed_response,
+    mark_failed_response_recovery,
+)
+from .code_workspace import write_workspace_file
 from .api import memori
 
 logger = logging.getLogger(__name__)
@@ -160,14 +166,19 @@ class _ToolEventRecorder(BaseCallbackHandler):
 
 
 class _TokenCallback(BaseCallbackHandler):
-    """Forward model tokens to a consumer without coupling the runtime to a UI."""
+    """Collect streamed text for failure recovery and optionally forward it to a UI."""
 
-    def __init__(self, callback: Callable[[str], None]) -> None:
+    def __init__(
+        self, partial_tokens: list[str], callback: Callable[[str], None] | None = None
+    ) -> None:
+        self.partial_tokens = partial_tokens
         self.callback = callback
 
     def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
         if token:
-            self.callback(token)
+            self.partial_tokens.append(token)
+            if self.callback is not None:
+                self.callback(token)
 
 
 class AgenticMemoryRuntime:
@@ -416,10 +427,11 @@ class AgenticMemoryRuntime:
             },
         )
         recorder = _ToolEventRecorder(self, turn_id)
+        partial_tokens: list[str] = []
         try:
             callbacks = [recorder]
-            if self.streaming and on_token is not None:
-                callbacks.append(_TokenCallback(on_token))
+            if self.streaming:
+                callbacks.append(_TokenCallback(partial_tokens, on_token))
             result = self.agent.invoke(
                 {"messages": [{"role": "user", "content": prompt}]},
                 config={"callbacks": callbacks, "metadata": {
@@ -443,6 +455,26 @@ class AgenticMemoryRuntime:
                     None,
                 )
             answer = str(getattr(final_message, "content", "")) if final_message else _json_text(result)
+            # Save explicitly marked complete artifacts only after generation ends.
+            complete_files, _ = parse_response_files(answer)
+            for artifact in complete_files:
+                try:
+                    write_workspace_file(
+                        self.user_id, self.task_id, artifact["path"], artifact["content"]
+                    )
+                except Exception:
+                    logger.exception(
+                        "Could not persist generated workspace artifact (user_id=%s, path=%s)",
+                        self.user_id, artifact["path"],
+                    )
+            # A successful turn after a recovery-tool call closes the active recovery.
+            try:
+                from .failed_responses import complete_recovering_failed_responses
+                complete_recovering_failed_responses(
+                    self.user_id, self.session_id, self.task_id
+                )
+            except Exception:
+                logger.exception("Could not mark recovered response as completed")
             # Persist long answers as ordered chunks. A single MongoDB event is
             # bounded to 50k characters; truncating here silently broke task resume
             # for generated websites and other long artifacts.
@@ -484,6 +516,25 @@ class AgenticMemoryRuntime:
                 "memory_retrieval_error": memory_error,
             }
         except Exception as exc:
+            # Preserve every token received before provider/API/token-limit failure.
+            # Persistence is best-effort and must never hide the original exception.
+            partial_response = "".join(partial_tokens)
+            try:
+                _, partial_files = parse_response_files(
+                    partial_response, allow_incomplete=True
+                )
+                save_failed_response(
+                    self.user_id, self.session_id, self.task_id, turn_id,
+                    partial_response,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    partial_files=partial_files,
+                )
+            except Exception:
+                logger.exception(
+                    "Could not persist interrupted response (user_id=%s, turn_id=%s)",
+                    self.user_id, turn_id,
+                )
             self._event(
                 turn_id=turn_id, role="system", event_type="task_failed",
                 content=f"Agent turn failed: {type(exc).__name__}: {exc}"[:3000],
