@@ -13,7 +13,7 @@ from .code_workspace import (
     read_workspace_file,
     write_workspace_file,
 )
-from .message_files import delete_agent_message_file, read_agent_message_file
+from .message_files import delete_agent_message_file, list_agent_message_files, read_agent_message_file
 
 
 def create_workspace_tools(user_id: str, session_id: str) -> list:
@@ -72,6 +72,11 @@ def create_workspace_tools(user_id: str, session_id: str) -> list:
         return delete_workspace_file(scoped_user, active_task_id(), path)
 
     @tool
+    def list_saved_messages() -> list[dict]:
+        """List long user/assistant messages saved in this conversation, including their paths and line counts."""
+        return list_agent_message_files(scoped_user, scoped_session)
+
+    @tool
     def read_saved_message(path: str, start_line: Optional[int] = None, end_line: Optional[int] = None) -> str:
         """Read a previously saved long user/assistant message; line numbers are 1-based and inclusive."""
         result = read_agent_message_file(
@@ -90,6 +95,7 @@ def create_workspace_tools(user_id: str, session_id: str) -> list:
         write_project_file,
         edit_project_file_lines,
         delete_project_file,
+        list_saved_messages,
         read_saved_message,
         delete_saved_message,
     ]
