@@ -98,3 +98,48 @@ def test_save_failed_response_redacts_provider_secrets(monkeypatch):
     )
     assert "sk-1234567890abcdef" not in saved["error_message"]
     assert "[REDACTED]" in saved["error_message"]
+
+
+def test_parse_single_markdown_code_block_with_explicit_save_as_filename():
+    response = """I'll create a calculator.
+
+```html
+<!doctype html>
+<html><body>Calculator</body></html>
+```
+
+Save this as `calculator.html`.
+"""
+    complete, partial = parse_response_files(response)
+    assert complete == [{
+        "path": "calculator.html",
+        "content": "<!doctype html>\n<html><body>Calculator</body></html>",
+    }]
+    assert partial == []
+
+
+def test_do_not_save_unlabeled_markdown_code_examples():
+    response = """Example:
+
+```python
+print("hello")
+```
+"""
+    complete, partial = parse_response_files(response)
+    assert complete == []
+    assert partial == []
+
+
+def test_preserve_unclosed_named_markdown_file_as_partial():
+    response = """Create this file:
+
+```html
+<!doctype html>
+<html><body>unfinished
+"""
+    complete, partial = parse_response_files(response, allow_incomplete=True)
+    assert complete == []
+    assert partial == [{
+        "path": "html",
+        "content": "<!doctype html>\n<html><body>unfinished",
+    }] or partial == []
