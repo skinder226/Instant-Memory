@@ -6,24 +6,33 @@ Paths are opaque references, not filesystem paths.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Any
+
+_indexes_ready = False
+_indexes_lock = Lock()
 
 MAX_MESSAGE_BYTES = 1_000_000
 _LONG_MESSAGE_THRESHOLD = 8_000
 
 
 def _collection():
+    global _indexes_ready
     from .mongodb_connection import db
     collection = db["agent_message_files"]
-    collection.create_index(
-        [("user_id", 1), ("session_id", 1), ("path", 1)],
-        unique=True,
-        name="agent_message_file_user_session_path_unique",
-    )
-    collection.create_index(
-        [("user_id", 1), ("session_id", 1), ("turn_id", 1)],
-        name="agent_message_file_user_session_turn",
-    )
+    if not _indexes_ready:
+        with _indexes_lock:
+            if not _indexes_ready:
+                collection.create_index(
+                    [("user_id", 1), ("session_id", 1), ("path", 1)],
+                    unique=True,
+                    name="agent_message_file_user_session_path_unique",
+                )
+                collection.create_index(
+                    [("user_id", 1), ("session_id", 1), ("turn_id", 1)],
+                    name="agent_message_file_user_session_turn",
+                )
+                _indexes_ready = True
     return collection
 
 
