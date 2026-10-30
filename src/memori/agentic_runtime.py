@@ -31,7 +31,7 @@ from .failed_responses import (
     mark_failed_response_recovery,
 )
 from .code_workspace import list_workspace_files, read_workspace_file, write_workspace_file
-from .message_files import save_agent_message_file
+from .message_files import list_agent_message_files, save_agent_message_file
 from .api import memori
 
 logger = logging.getLogger(__name__)
@@ -466,6 +466,14 @@ class AgenticMemoryRuntime:
             )
 
         prompt_context: dict[str, Any] = {"long_term_memories": long_term}
+        try:
+            saved_message_history = list_agent_message_files(
+                self.user_id, self.session_id, limit=20
+            )
+            if saved_message_history:
+                prompt_context["saved_message_files"] = saved_message_history
+        except Exception:
+            logger.exception("Could not list saved long messages for current session")
         if saved_user_message:
             prompt_context["saved_user_message"] = saved_user_message
         if recovery_context:
@@ -519,7 +527,14 @@ class AgenticMemoryRuntime:
             "Do not return a code fence instead of these markers. Do not merely tell the user to save code manually. "
             "After the final marker, briefly list the files created. Never claim a file was saved unless the runtime "
             "confirms it was written to MongoDB. If interrupted, preserve any unfinished file block for recovery. "
-            "For a request to explain code rather than create files, answer normally without file markers.\n\n"
+            "For a request to explain code rather than create files, answer normally without file markers. "
+            "LONG MESSAGE RULE: Long user and assistant messages may be stored as message files. "
+            "Their paths and line counts are included in CONTEXT. Use list_saved_messages() to discover "
+            "saved message paths, then read_saved_message(path, start_line, end_line) to retrieve all "
+            "or a 1-based inclusive line range. If the user refers to a file as path[1-5] or names "
+            "a file plus a range such as 1-5, interpret that as lines 1 through 5 and read exactly "
+            "that range. Use delete_saved_message(path) only when the user explicitly asks to delete "
+            "that saved message. Never guess a path.\n\n"
             "CONTEXT (JSON):\n" + context_text
             + "\n\nCURRENT USER REQUEST:\n" + user_input
         )
