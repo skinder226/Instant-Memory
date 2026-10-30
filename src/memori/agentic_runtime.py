@@ -686,10 +686,16 @@ class AgenticMemoryRuntime:
             partial_response = "".join(partial_tokens)
             try:
                 if len(partial_response.encode("utf-8")) > 8_000:
-                    save_agent_message_file(
-                        self.user_id, self.session_id, self.task_id,
-                        turn_id, "assistant_partial", partial_response,
-                    )
+                    try:
+                        save_agent_message_file(
+                            self.user_id, self.session_id, self.task_id,
+                            turn_id, "assistant_partial", partial_response,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Could not persist partial assistant message file (turn_id=%s)",
+                            turn_id,
+                        )
                 complete_files, partial_files = parse_response_files(
                     partial_response, allow_incomplete=True
                 )
