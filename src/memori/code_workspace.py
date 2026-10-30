@@ -222,6 +222,23 @@ def write_workspace_file(
     return {"path": path.relative_to(root).as_posix(), "bytes": path.stat().st_size}
 
 
+def delete_workspace_file(
+    user_id: str, task_id: str, relative_path: str, *, base_dir: str | Path | None = None
+) -> bool:
+    """Delete one file from the authenticated user's task workspace."""
+    if base_dir is None:
+        user_key, task_key = _cloud_keys(user_id, task_id)
+        rel = _relative_path(relative_path)
+        result = _cloud_collection().delete_one(
+            {"user_key": user_key, "task_key": task_key, "path": rel}
+        )
+        return result.deleted_count == 1
+    root = workspace_root(user_id, task_id, base_dir)
+    path = _safe_file(root, relative_path)
+    path.unlink()
+    return True
+
+
 def apply_workspace_patch(
     user_id: str,
     task_id: str,
