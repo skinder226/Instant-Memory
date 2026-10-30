@@ -131,7 +131,7 @@ print("hello")
 
 
 def test_preserve_unclosed_named_markdown_file_as_partial():
-    response = """Create this file:
+    response = """Save this as `calculator.html`:
 
 ```html
 <!doctype html>
@@ -140,6 +140,6 @@ def test_preserve_unclosed_named_markdown_file_as_partial():
     complete, partial = parse_response_files(response, allow_incomplete=True)
     assert complete == []
     assert partial == [{
-        "path": "html",
+        "path": "calculator.html",
         "content": "<!doctype html>\n<html><body>unfinished",
-    }] or partial == []
+    }]
