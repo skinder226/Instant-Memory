@@ -423,7 +423,7 @@ class AgenticMemoryRuntime:
                     self.user_id, self.task_id, file_info["path"]
                 )
                 if len(file_content) > remaining:
-                    file_content = file_content[:remaining] + "\\n[TRUNCATED: read the file from workspace before editing]"
+                    file_content = file_content[:remaining] + "\n[TRUNCATED: read the file from workspace before editing]"
                 workspace_context.append({
                     "path": file_info["path"],
                     "content": file_content,
