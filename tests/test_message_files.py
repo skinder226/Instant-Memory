@@ -1,6 +1,22 @@
 from memori import message_files
 
 
+class FakeCursor:
+    def __init__(self, docs):
+        self.docs = list(docs)
+
+    def sort(self, key, direction):
+        self.docs.sort(key=lambda doc: doc.get(key), reverse=direction < 0)
+        return self
+
+    def limit(self, count):
+        self.docs = self.docs[:count]
+        return self
+
+    def __iter__(self):
+        return iter(self.docs)
+
+
 class FakeCollection:
     def __init__(self):
         self.docs = {}
@@ -15,6 +31,14 @@ class FakeCollection:
 
     def find_one(self, query, projection=None):
         return self.docs.get((query["user_id"], query["session_id"], query["path"]))
+
+    def find(self, query, projection=None):
+        docs = [
+            doc for doc in self.docs.values()
+            if doc.get("user_id") == query.get("user_id")
+            and doc.get("session_id") == query.get("session_id")
+        ]
+        return FakeCursor(docs)
 
     def delete_one(self, query):
         key = (query["user_id"], query["session_id"], query["path"])
@@ -71,3 +95,19 @@ def test_message_file_rejects_invalid_line_range(monkeypatch):
         message_files.read_agent_message_file(
             "user-a", "session-a", saved["path"], 0, 1
         )
+
+
+
+def test_list_saved_message_paths_is_scoped_and_includes_line_counts(monkeypatch):
+    collection = FakeCollection()
+    monkeypatch.setattr(message_files, "_collection", lambda: collection)
+    message_files.save_agent_message_file(
+        "user-a", "session-a", "task-a", "turn-a", "user", "first\\nsecond\\n"
+    )
+    message_files.save_agent_message_file(
+        "user-b", "session-a", "task-b", "turn-b", "assistant", "private"
+    )
+    listed = message_files.list_agent_message_files("user-a", "session-a")
+    assert len(listed) == 1
+    assert listed[0]["path"] == "messages/turn-a-user.txt"
+    assert listed[0]["line_count"] == 2
