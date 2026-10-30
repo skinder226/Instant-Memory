@@ -310,11 +310,11 @@ A FastAPI SSE adapter must forward activity events to the browser, for example:
 
 ```python
 elif event_type == "activity":
-    yield "event: activity\\ndata: " + json.dumps({
+    yield "event: activity\ndata: " + json.dumps({
         "stage": item.get("stage"),
         "tool": item.get("tool"),
         "message": item.get("message"),
-    }) + "\\n\\n"
+    }) + "\n\n"
 ```
 
 The browser should render each `activity` event as a live status item, and
