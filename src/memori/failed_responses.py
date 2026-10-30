@@ -111,7 +111,7 @@ def parse_response_files(response: str, *, allow_incomplete: bool = False) -> tu
         fence_pattern = re.compile(r"(?m)^\\s*```([A-Za-z0-9_+.-]*)\\s*\\r?\\n")
         fences = list(fence_pattern.finditer(response))
         filename_pattern = re.compile(
-            r"(?i)\\b(?:save(?:\\s+this)?\\s+as|file(?:name)?\\s*[:=])\\s*[\\x60\\"']?([A-Za-z0-9_./-]{1,240}\\.[A-Za-z0-9]{1,12})"
+            r"(?i)\\b(?:save(?:\\s+this)?\\s+as|file(?:name)?\\s*[:=])\\s*[^A-Za-z0-9_./-]*([A-Za-z0-9_./-]{1,240}\\.[A-Za-z0-9]{1,12})"
         )
         for index, opening in enumerate(fences):
             next_open = fences[index + 1].start() if index + 1 < len(fences) else len(response)
