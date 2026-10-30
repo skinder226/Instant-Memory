@@ -318,7 +318,7 @@ def find_latest_active_agent_task(user_id: str, session_id: str) -> dict[str, An
         {
             "user_id": user_id,
             "session_id": session_id,
-            "status": {"$in": ["pending", "running", "paused"]},
+            "status": {"$in": ["pending", "running", "paused", "completed", "failed"]},
         },
         {"_id": 0},
         sort=[("updated_at", DESCENDING), ("created_at", DESCENDING)],
