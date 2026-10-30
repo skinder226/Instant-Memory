@@ -91,11 +91,14 @@ response text, error details, status, timestamps, unfinished file drafts, and
 recovery-attempt history. The unique `(user_id, turn_id)` index prevents duplicate
 records for the same failed turn.
 
-When streaming is enabled, the runtime collects tokens even if no UI token callback
-is supplied. If the model/provider raises (including token-limit and API errors),
-the collected partial text and any unfinished marked file blocks are saved. This
-write is best-effort: a MongoDB failure is logged and does not replace the original
-model/provider exception.
+When runtime streaming is enabled, the runtime collects tokens even if no UI token
+callback is supplied. The underlying chat model must also have token streaming
+enabled; the runtime cannot reconstruct text that a non-streaming provider never
+emitted. If the model/provider raises (including token-limit and API errors), the
+collected partial text and any unfinished marked file blocks are saved. This write
+is best-effort: a MongoDB failure is logged and does not replace the original
+model/provider exception. Common credential patterns in exception text are
+redacted before storage.
 
 To let the agent recover its own failed output, add the scoped recovery tool when
 constructing the agent. The factory closes over the authenticated user, task, and
