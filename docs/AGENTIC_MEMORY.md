@@ -133,16 +133,26 @@ For file generation, the agent can include explicit blocks in its final response
 ## Ending file (index.html)
 ```
 
-The runtime parses and saves complete blocks to the task's existing
-`workspace_files` storage after the model finishes. It does not write files while
-tokens are streaming. If generation fails mid-block, the unfinished content is
-preserved in `failed_responses.partial_files` for recovery; it is not exposed as
-a completed workspace file. File paths are checked to reject absolute paths and
-directory traversal. Existing workspace read/edit/list operations remain
-available, and `delete_workspace_file(user_id, task_id, path)` provides scoped
-deletion. By default, the existing workspace backend stores file content in
-MongoDB's `workspace_files` collection; pass `base_dir` to the workspace
-functions when you explicitly want local filesystem storage.
+The runtime instructs the agent to wrap each generated file in the exact
+`## Create File (relative/path.ext)` and `## Ending file (relative/path.ext)`
+markers. It parses and saves complete blocks to the `workspace_files` collection
+after the model finishes; it does not write files while tokens are streaming.
+For compatibility, a single Markdown code block is also saved when the response
+explicitly says which filename to save it as (for example, "Save this as
+`calculator.html`"). Unlabelled code examples are not treated as files.
+
+If generation fails mid-block, unfinished content is preserved in
+`failed_responses.partial_files` for recovery; it is not exposed as a completed
+workspace file. File paths are checked to reject absolute paths and directory
+traversal. Existing workspace read/edit/list operations remain available, and
+`delete_workspace_file(user_id, task_id, path)` provides scoped deletion.
+
+The `workspace_files` collection is created in the **same MongoDB database
+configured for Memori**, through `mongodb_connection.db`; there is no separate
+workspace database or alternate workspace MongoDB URI. The runtime result
+includes `workspace_files` for successful writes and `workspace_file_errors`
+when a write fails. Pass `base_dir` to workspace functions only when you
+explicitly want local filesystem storage.
 
 ## Interactive example
 
