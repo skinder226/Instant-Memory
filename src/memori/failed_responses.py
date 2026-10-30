@@ -16,6 +16,22 @@ _indexes_ready = False
 _indexes_lock = threading.Lock()
 
 
+def _safe_error(value: Any) -> str:
+    """Avoid persisting common provider credentials echoed in exception text."""
+    text = str(value)
+    text = re.sub(r"(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+=*", r"\\1[REDACTED]", text)
+    text = re.sub(
+        r"(?i)((?:api[_-]?key|access[_-]?token|password|secret)\\s*[=:]\\s*)[^\\s,;]+",
+        r"\\1[REDACTED]", text,
+    )
+    text = re.sub(r"\\b(?:sk-[A-Za-z0-9_-]{12,}|gsk_[A-Za-z0-9_-]{12,})\\b", "[REDACTED]", text)
+    text = re.sub(
+        r"(?i)(mongodb(?:\\+srv)?://[^:/\\s]+:)[^@/\\s]+(@)",
+        r"\\1[REDACTED]\\2", text,
+    )
+    return text
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -92,7 +108,7 @@ def save_failed_response(
         "partial_files": partial_files or [],
         "status": "failed",
         "error_type": str(error_type)[:200],
-        "error_message": str(error_message)[:_MAX_ERROR_CHARS],
+        "error_message": _safe_error(error_message)[:_MAX_ERROR_CHARS],
         "created_at": now,
         "updated_at": now,
         "recovery_attempts": [],
