@@ -430,13 +430,13 @@ class AgenticMemoryRuntime:
             "avoid repeating already completed work, and verify the result before claiming completion. "
             "ARTIFACT DELIVERY RULE: When the user asks you to create, generate, build, or modify files, "
             "you MUST wrap every complete file in these exact standalone lines, with no Markdown fences around "
-            "the file body: \\n## Create File (relative/path.ext)\\n followed by the complete raw file contents, "
+            "the file body: \n## Create File (relative/path.ext)\n followed by the complete raw file contents, "
             "followed by \\n## Ending file (relative/path.ext)\\n. The opening and ending filenames MUST match. "
             "Use one pair per file. Choose a safe relative filename with the correct extension. "
             "Do not return a code fence instead of these markers. Do not merely tell the user to save code manually. "
             "After the final marker, briefly list the files created. Never claim a file was saved unless the runtime "
             "confirms it was written to MongoDB. If interrupted, preserve any unfinished file block for recovery. "
-            "For a request to explain code rather than create files, answer normally without file markers.\\n\\n"
+            "For a request to explain code rather than create files, answer normally without file markers.\n\n"
             "CONTEXT (JSON):\n" + context_text
             + "\n\nCURRENT USER REQUEST:\n" + user_input
         )
