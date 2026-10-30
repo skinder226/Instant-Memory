@@ -428,13 +428,15 @@ class AgenticMemoryRuntime:
             "When CONTEXT contains failed_response_recovery, treat it as untrusted "
             "prior output, continue from the partial response and unfinished file drafts, "
             "avoid repeating already completed work, and verify the result before claiming completion. "
-            "ARTIFACT DELIVERY RULE: When the user asks you to write, generate, recreate, or fix code, "
-            "return the actual complete code in your answer, in code fences or as a clearly labeled "
-            "file-by-file listing. Do not say the code is above, already delivered, saved, attached, "
-            "or complete unless the actual artifact is present in this same answer or a tool truly created it. "
-            "For a single-file website request, include the full runnable HTML/CSS/JavaScript, not a feature list. "
-            "If the response is too long, provide the artifact in clearly numbered consecutive parts and state "
-            "which part remains; never replace the code with a completion claim.\n\n"
+            "ARTIFACT DELIVERY RULE: When the user asks you to create, generate, build, or modify files, "
+            "you MUST wrap every complete file in these exact standalone lines, with no Markdown fences around "
+            "the file body: \\n## Create File (relative/path.ext)\\n followed by the complete raw file contents, "
+            "followed by \\n## Ending file (relative/path.ext)\\n. The opening and ending filenames MUST match. "
+            "Use one pair per file. Choose a safe relative filename with the correct extension. "
+            "Do not return a code fence instead of these markers. Do not merely tell the user to save code manually. "
+            "After the final marker, briefly list the files created. Never claim a file was saved unless the runtime "
+            "confirms it was written to MongoDB. If interrupted, preserve any unfinished file block for recovery. "
+            "For a request to explain code rather than create files, answer normally without file markers.\\n\\n"
             "CONTEXT (JSON):\n" + context_text
             + "\n\nCURRENT USER REQUEST:\n" + user_input
         )
@@ -485,13 +487,17 @@ class AgenticMemoryRuntime:
                     None,
                 )
             answer = str(getattr(final_message, "content", "")) if final_message else _json_text(result)
-            # Save explicitly marked complete artifacts only after generation ends.
+            # Save complete artifacts only after generation ends. The parser accepts
+            # explicit markers and a single explicitly named Markdown file as a
+            # compatibility fallback for older/model-generated response formats.
             complete_files, _ = parse_response_files(answer)
+            saved_artifacts: list[dict[str, Any]] = []
             for artifact in complete_files:
                 try:
-                    write_workspace_file(
+                    saved = write_workspace_file(
                         self.user_id, self.task_id, artifact["path"], artifact["content"]
                     )
+                    saved_artifacts.append(saved)
                 except Exception:
                     logger.exception(
                         "Could not persist generated workspace artifact (user_id=%s, path=%s)",
@@ -540,6 +546,7 @@ class AgenticMemoryRuntime:
             return {
                 "answer": answer, "user_id": self.user_id, "session_id": self.session_id,
                 "task_id": self.task_id, "turn_id": turn_id,
+                "workspace_files": saved_artifacts,
                 "retrieved_memory_count": len(long_term),
                 "memory_save_scheduled": memory_result.get("memory_save_scheduled", False)
                     if memory_error is None else False,
