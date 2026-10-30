@@ -12,9 +12,11 @@ class _FakeRuntime(AgenticMemoryRuntime):
         self.streaming = streaming
         self.fail = fail
 
-    def run(self, user_input, *, task_goal=None, on_token=None):
+    def run(self, user_input, *, task_goal=None, on_token=None, on_progress=None):
         if self.fail:
             raise TimeoutError("simulated provider timeout")
+        if on_progress is not None:
+            on_progress({"type": "activity", "stage": "agent_working", "message": "Working"})
         if on_token is not None:
             on_token("Hello ")
             on_token("world")
@@ -30,7 +32,8 @@ def test_streaming_is_disabled_by_default_contract():
 def test_stream_yields_tokens_then_final_result():
     runtime = _FakeRuntime(streaming=True)
     events = list(runtime.stream("hello"))
-    assert [event["type"] for event in events] == ["token", "token", "result"]
+    assert [event["type"] for event in events] == ["activity", "token", "token", "result"]
+    assert events[0]["stage"] == "agent_working"
     assert "".join(event["content"] for event in events if event["type"] == "token") == "Hello world"
     assert events[-1]["result"]["answer"] == "Hello world"
 
