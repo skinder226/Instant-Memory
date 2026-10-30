@@ -62,7 +62,7 @@ def _collection():
 
 def _valid_artifact_path(name: str) -> bool:
     """Accept only relative paths with a supported source-file extension."""
-    normalized = name.strip().replace("\\\\", "/")
+    normalized = name.strip().replace("\\", "/")
     parts = normalized.split("/")
     return bool(
         normalized
@@ -74,12 +74,11 @@ def _valid_artifact_path(name: str) -> bool:
 
 
 def parse_response_files(response: str, *, allow_incomplete: bool = False) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Parse explicit file markers and clearly named Markdown code artifacts.
+    """Parse explicit file markers or a single Markdown block with an explicit filename.
 
-    Preferred format is the explicit Create/Ending markers. As a compatibility
-    fallback, a fenced code block is saved only when the response explicitly
-    names its filename (for example, "Save this as calculator.html"). This
-    avoids treating ordinary explanatory code snippets as workspace files.
+    Explicit Create/Ending markers are preferred. For compatibility with agents
+    that return a fenced code block plus "Save this as filename.ext", parse that
+    block too. Ordinary code examples without an explicit filename are ignored.
     """
     if not isinstance(response, str):
         return [], []
@@ -87,16 +86,16 @@ def parse_response_files(response: str, *, allow_incomplete: bool = False) -> tu
     partial: list[dict[str, str]] = []
     opens = list(_MARKER_OPEN.finditer(response))
     for index, opening in enumerate(opens):
-        name = opening.group(1).strip().replace("\\\\", "/")
+        name = opening.group(1).strip().replace("\\", "/")
         body_start = opening.end()
         next_open = opens[index + 1].start() if index + 1 < len(opens) else len(response)
         closing = next(
             (m for m in _MARKER_CLOSE.finditer(response, body_start, next_open)
-             if m.group(1).strip().replace("\\\\", "/") == name),
+             if m.group(1).strip().replace("\\", "/") == name),
             None,
         )
         body_end = closing.start() if closing else next_open
-        body = response[body_start:body_end].lstrip("\\r\\n").rstrip()
+        body = response[body_start:body_end].lstrip("\r\n").rstrip()
         if not _valid_artifact_path(name):
             continue
         entry = {"path": name, "content": body}
@@ -105,30 +104,26 @@ def parse_response_files(response: str, *, allow_incomplete: bool = False) -> tu
         elif allow_incomplete and body:
             partial.append(entry)
 
-    # Do not parse Markdown fences when explicit file blocks are present: those
-    # fences may simply be examples or code embedded in a file's documentation.
+    # Do not mistake code examples inside explicit file blocks for extra files.
     if not opens:
-        fence_pattern = re.compile(r"(?m)^\\s*```([A-Za-z0-9_+.-]*)\\s*\\r?\\n")
+        fence_pattern = re.compile(r"(?m)^\s*\x60{3}([A-Za-z0-9_+.-]*)\s*\r?\n")
         fences = list(fence_pattern.finditer(response))
         filename_pattern = re.compile(
-            r"(?i)\\b(?:save(?:\\s+this)?\\s+as|file(?:name)?\\s*[:=])\\s*[^A-Za-z0-9_./-]*([A-Za-z0-9_./-]{1,240}\\.[A-Za-z0-9]{1,12})"
+            r"(?i)\b(?:save(?:\s+this)?\s+as|file(?:name)?\s*[:=])\s*[^\w./-]*([\w./-]{1,240}\.[A-Za-z0-9]{1,12})"
         )
-        for index, opening in enumerate(fences):
-            next_open = fences[index + 1].start() if index + 1 < len(fences) else len(response)
-            close = re.search(r"(?m)^\\s*```\\s*$", response[opening.end():next_open])
-            body_end = opening.end() + close.start() if close else next_open
+        filename_matches = list(filename_pattern.finditer(response))
+        if len(fences) == 1 and len(filename_matches) == 1:
+            opening = fences[0]
+            closing = re.search(r"(?m)^\s*\x60{3}\s*$", response[opening.end():])
+            body_end = opening.end() + closing.start() if closing else len(response)
             body = response[opening.end():body_end].rstrip()
-            # Filename must be explicitly associated with this single-file
-            # artifact; accept an explicit save-as/file label anywhere nearby.
-            filename_matches = list(filename_pattern.finditer(response))
-            if len(fences) == 1 and len(filename_matches) == 1:
-                name = filename_matches[0].group(1).strip().replace("\\\\", "/")
-                if _valid_artifact_path(name) and body:
-                    entry = {"path": name, "content": body}
-                    if close:
-                        complete.append(entry)
-                    elif allow_incomplete:
-                        partial.append(entry)
+            name = filename_matches[0].group(1).strip().replace("\\", "/")
+            if _valid_artifact_path(name) and body:
+                entry = {"path": name, "content": body}
+                if closing:
+                    complete.append(entry)
+                elif allow_incomplete:
+                    partial.append(entry)
     return complete, partial
 
 def save_failed_response(
