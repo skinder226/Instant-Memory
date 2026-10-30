@@ -1,8 +1,8 @@
 """Durable storage and recovery helpers for interrupted agent responses."""
 from __future__ import annotations
 
-import hashlib
 import re
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,21 +19,26 @@ def _now() -> datetime:
 
 
 def _collection():
+    global _indexes_ready
     from .mongodb_connection import db
     collection = db["failed_responses"]
-    collection.create_index(
-        [("user_id", ASCENDING), ("turn_id", ASCENDING)],
-        unique=True,
-        name="failed_response_user_turn_unique",
-    )
-    collection.create_index(
-        [("user_id", ASCENDING), ("task_id", ASCENDING), ("created_at", DESCENDING)],
-        name="failed_response_user_task_time",
-    )
-    collection.create_index(
-        [("user_id", ASCENDING), ("session_id", ASCENDING), ("created_at", DESCENDING)],
-        name="failed_response_user_session_time",
-    )
+    if not _indexes_ready:
+        with _indexes_lock:
+            if not _indexes_ready:
+                collection.create_index(
+                    [("user_id", ASCENDING), ("turn_id", ASCENDING)],
+                    unique=True,
+                    name="failed_response_user_turn_unique",
+                )
+                collection.create_index(
+                    [("user_id", ASCENDING), ("task_id", ASCENDING), ("created_at", DESCENDING)],
+                    name="failed_response_user_task_time",
+                )
+                collection.create_index(
+                    [("user_id", ASCENDING), ("session_id", ASCENDING), ("created_at", DESCENDING)],
+                    name="failed_response_user_session_time",
+                )
+                _indexes_ready = True
     return collection
 
 
@@ -79,7 +84,6 @@ def save_failed_response(
     now = _now()
     collection = _collection()
     key = {"user_id": user_id, "turn_id": turn_id}
-    existing = collection.find_one(key, {"_id": 1, "recovery_attempts": 1})
     document = {
         **key, "session_id": session_id, "task_id": task_id,
         "partial_response": response,
@@ -87,13 +91,13 @@ def save_failed_response(
         "status": "failed",
         "error_type": str(error_type)[:200],
         "error_message": str(error_message)[:_MAX_ERROR_CHARS],
+        "created_at": now,
         "updated_at": now,
+        "recovery_attempts": [],
     }
-    if existing:
-        collection.update_one(key, {"$set": document})
-    else:
-        document.update({"created_at": now, "recovery_attempts": []})
-        collection.insert_one(document)
+    # Atomic insert-once semantics: concurrent retries for one turn cannot race
+    # into duplicate documents or reset a record already being recovered.
+    collection.update_one(key, {"$setOnInsert": document}, upsert=True)
     saved = collection.find_one(key, {"_id": 0})
     return saved or document
 
