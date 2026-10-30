@@ -519,9 +519,23 @@ class AgenticMemoryRuntime:
             # Persistence is best-effort and must never hide the original exception.
             partial_response = "".join(partial_tokens)
             try:
-                _, partial_files = parse_response_files(
+                complete_files, partial_files = parse_response_files(
                     partial_response, allow_incomplete=True
                 )
+                # Persist any fully closed file blocks even if a later block was
+                # interrupted; keep only unfinished blocks in failed_responses.
+                for artifact in complete_files:
+                    try:
+                        write_workspace_file(
+                            self.user_id, self.task_id,
+                            artifact["path"], artifact["content"],
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Could not persist completed artifact from interrupted turn "
+                            "(user_id=%s, path=%s)",
+                            self.user_id, artifact["path"],
+                        )
                 save_failed_response(
                     self.user_id, self.session_id, self.task_id, turn_id,
                     partial_response,
