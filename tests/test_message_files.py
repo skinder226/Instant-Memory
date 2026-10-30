@@ -102,7 +102,7 @@ def test_list_saved_message_paths_is_scoped_and_includes_line_counts(monkeypatch
     collection = FakeCollection()
     monkeypatch.setattr(message_files, "_collection", lambda: collection)
     message_files.save_agent_message_file(
-        "user-a", "session-a", "task-a", "turn-a", "user", "first\\nsecond\\n"
+        "user-a", "session-a", "task-a", "turn-a", "user", "first\nsecond\n"
     )
     message_files.save_agent_message_file(
         "user-b", "session-a", "task-b", "turn-b", "assistant", "private"
