@@ -377,7 +377,7 @@ class AgenticMemoryRuntime:
             previous_failure = get_failed_response(
                 self.user_id, task_id=self.task_id, session_id=self.session_id
             )
-            if previous_failure and previous_failure.get("status") == "failed":
+            if previous_failure and previous_failure.get("status") in {"failed", "recovering"}:
                 recovery_context = {
                     "failed_turn_id": previous_failure.get("turn_id"),
                     "partial_response": previous_failure.get("partial_response", ""),
