@@ -126,6 +126,29 @@ def mark_failed_response_recovery(
     return collection.find_one(key, {"_id": 0})
 
 
+def complete_recovering_failed_responses(user_id: str, session_id: str, task_id: str) -> int:
+    """Mark active recovery records complete after a successful agent turn."""
+    now = _now()
+    result = _collection().update_many(
+        {
+            "user_id": user_id,
+            "session_id": session_id,
+            "task_id": task_id,
+            "status": "recovering",
+        },
+        {
+            "$set": {"status": "recovered", "updated_at": now},
+            "$push": {
+                "recovery_attempts": {
+                    "at": now, "status": "recovered",
+                    "outcome": "Agent completed a subsequent turn successfully.",
+                }
+            },
+        },
+    )
+    return int(result.modified_count)
+
+
 def create_failed_response_recovery_tool(*, user_id: str, task_id: str, session_id: str):
     """Create a LangChain tool scoped to one authenticated user/task/session.
 
