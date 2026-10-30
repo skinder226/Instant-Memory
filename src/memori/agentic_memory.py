@@ -304,6 +304,27 @@ def save_agent_task(
     return tasks.find_one({"user_id": user_id, "task_id": task_id}, {"_id": 0}) or document
 
 
+def find_latest_active_agent_task(user_id: str, session_id: str) -> dict[str, Any] | None:
+    """Find the most recently updated active task in one user's conversation session.
+
+    This lets applications recreate AgenticMemoryRuntime between turns without
+    accidentally creating a fresh task each time. The caller must keep session_id
+    stable for the lifetime of the conversation.
+    """
+    user_id = _required_text(user_id, "user_id")
+    session_id = _required_text(session_id, "session_id")
+    _, tasks = _collections()
+    return tasks.find_one(
+        {
+            "user_id": user_id,
+            "session_id": session_id,
+            "status": {"$in": ["pending", "running", "paused"]},
+        },
+        {"_id": 0},
+        sort=[("updated_at", DESCENDING), ("created_at", DESCENDING)],
+    )
+
+
 def get_agent_task(user_id: str, task_id: str) -> dict[str, Any] | None:
     """Retrieve one task state, scoped to the owning user."""
     user_id = _required_text(user_id, "user_id")
