@@ -104,7 +104,10 @@ def save_failed_response(
     return saved or document
 
 
-def get_failed_response(user_id: str, failed_response_id: str | None = None, *, task_id: str | None = None) -> dict[str, Any] | None:
+def get_failed_response(
+    user_id: str, failed_response_id: str | None = None, *,
+    task_id: str | None = None, session_id: str | None = None,
+) -> dict[str, Any] | None:
     """Fetch a failed response only inside the authenticated user's scope."""
     if not isinstance(user_id, str) or not user_id.strip():
         raise ValueError("user_id must be a non-empty string.")
@@ -113,6 +116,8 @@ def get_failed_response(user_id: str, failed_response_id: str | None = None, *, 
         query["turn_id"] = failed_response_id
     if task_id:
         query["task_id"] = task_id
+    if session_id:
+        query["session_id"] = session_id
     return _collection().find_one(query, {"_id": 0}, sort=[("created_at", DESCENDING)])
 
 
@@ -175,7 +180,9 @@ def create_failed_response_recovery_tool(*, user_id: str, task_id: str, session_
         task = get_agent_task(user_id, task_id)
         if not task or task.get("session_id") not in (None, session_id):
             return "No failed response is available for this task/session."
-        failed = get_failed_response(user_id, turn_id or None, task_id=task_id)
+        failed = get_failed_response(
+            user_id, turn_id or None, task_id=task_id, session_id=session_id
+        )
         if not failed or failed.get("session_id") != session_id:
             return "No failed response is available for this task/session."
         mark_failed_response_recovery(user_id, failed["turn_id"], status="recovering")
