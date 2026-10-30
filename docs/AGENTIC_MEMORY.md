@@ -91,47 +91,34 @@ response text, error details, status, timestamps, unfinished file drafts, and
 recovery-attempt history. The unique `(user_id, turn_id)` index prevents duplicate
 records for the same failed turn.
 
-When runtime streaming is enabled, the runtime collects tokens even if no UI token
-callback is supplied. The underlying chat model must also have token streaming
-enabled; the runtime cannot reconstruct text that a non-streaming provider never
-emitted. If the model/provider raises (including token-limit and API errors), the
-collected partial text and any unfinished marked file blocks are saved. This write
-is best-effort: a MongoDB failure is logged and does not replace the original
-model/provider exception. Common credential patterns in exception text are
-redacted before storage.
+Recovery is built into `AgenticMemoryRuntime`; the host application does not need
+to import or register a recovery tool. On the next turn, the runtime checks for a
+failed response belonging to the same authenticated user, session, and task,
+marks it as recovering, and adds its partial output and unfinished file drafts to
+the agent context with instructions to continue rather than restart. A successful
+subsequent turn marks that recovery as `recovered`. Keep the same `user_id`,
+`session_id`, and `task_id` when resuming the same task.
 
-To let the agent recover its own failed output, add the scoped recovery tool when
-constructing the agent. The factory closes over the authenticated user, task, and
-session IDs; the model cannot choose another user's scope:
+The runtime always attaches a token-capture callback. To preserve partial text,
+the underlying chat model/provider must itself have streaming enabled and emit
+tokens before raising (for example, on a token-limit or API error). If the provider
+does not emit tokens, the failure record can still capture the error, but its
+`partial_response` will be empty. MongoDB write failures are logged and do not
+replace the original provider exception. Common credential patterns in exception
+text are redacted before storage.
 
 ```python
-from langchain.agents import create_agent
-from langchain_groq import ChatGroq
-from memori import AgenticMemoryRuntime, create_failed_response_recovery_tool
+from memori import AgenticMemoryRuntime
 
-user_id = authenticated_principal.id  # obtain from your verified auth layer
-session_id = "your-session-id"
-task_id = "your-task-id"
-
-recovery_tool = create_failed_response_recovery_tool(
-    user_id=user_id, session_id=session_id, task_id=task_id
-)
-agent = create_agent(
-    model=ChatGroq(api_key="...", model="YOUR_TOOL_CALLING_MODEL", temperature=0),
-    tools=[recovery_tool],  # include your other explicitly authorized tools too
-    system_prompt="When continuing interrupted work, call recover_failed_response first.",
-)
 runtime = AgenticMemoryRuntime(
-    user_id=user_id, session_id=session_id, task_id=task_id, agent=agent,
-    streaming=True,
+    user_id=authenticated_principal.id,  # verified server-side identity
+    session_id="stable-session-id",
+    task_id="stable-task-id",
+    agent=agent,  # your existing agent and its authorized tools
 )
+# On a retry, reuse the same runtime or recreate it with the same IDs.
+result = runtime.run("Continue the task")
 ```
-
-The recovery tool returns the prior partial output and unfinished file drafts. The
-agent must continue from that point, verify its work, and only then complete the
-task. A successful subsequent runtime turn changes the recovery record to
-`recovered`; until then it remains `recovering`. The record is retained for
-audit/recovery rather than deleted.
 
 ### Marker-based file output
 
