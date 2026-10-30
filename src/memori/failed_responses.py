@@ -12,6 +12,8 @@ _MAX_RESPONSE_CHARS = 200_000
 _MAX_ERROR_CHARS = 4_000
 _MARKER_OPEN = re.compile(r"(?m)^## Create File \(([^\r\n()]{1,240})\)\s*$")
 _MARKER_CLOSE = re.compile(r"(?m)^## Ending file \(([^\r\n()]{1,240})\)\s*$")
+_indexes_ready = False
+_indexes_lock = threading.Lock()
 
 
 def _now() -> datetime:
