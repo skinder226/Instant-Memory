@@ -13,6 +13,7 @@ logging.getLogger("memori").addHandler(logging.NullHandler())
 from .api import memori
 from .agentic_runtime import AgenticMemoryRuntime
 from .code_workspace import delete_workspace_file
+from .workspace_tools import create_workspace_tools
 from .agentic_memory import (
     get_agent_task,
     list_resumable_agent_tasks,
@@ -27,6 +28,7 @@ __all__ = [
     "memori",
     "AgenticMemoryRuntime",
     "delete_workspace_file",
+    "create_workspace_tools",
     "record_agent_event",
     "retrieve_agent_history",
     "save_agent_task",
