@@ -17,6 +17,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 from .agentic_memory import (
     get_agent_task,
+    find_latest_active_agent_task,
     list_resumable_agent_tasks,
     record_agent_event,
     retrieve_agent_history,
@@ -29,7 +30,7 @@ from .failed_responses import (
     get_failed_response,
     mark_failed_response_recovery,
 )
-from .code_workspace import write_workspace_file
+from .code_workspace import list_workspace_files, read_workspace_file, write_workspace_file
 from .api import memori
 
 logger = logging.getLogger(__name__)
@@ -214,8 +215,19 @@ class AgenticMemoryRuntime:
             raise ValueError("history_limit must be between 1 and 100.")
         self.user_id = user_id.strip()
         self.agent = agent
+        # A host application must keep session_id stable for one chat. When it
+        # recreates this runtime between messages, reuse that session's active
+        # task instead of silently starting a new project/task.
         self.session_id = session_id or f"session-{uuid.uuid4().hex}"
-        self.task_id = task_id or f"task-{uuid.uuid4().hex}"
+        if task_id is not None:
+            self.task_id = task_id
+        else:
+            active_task = find_latest_active_agent_task(self.user_id, self.session_id)
+            self.task_id = (
+                str(active_task["task_id"])
+                if active_task and active_task.get("task_id")
+                else f"task-{uuid.uuid4().hex}"
+            )
         self.history_limit = history_limit
         self.memory_limit_chars = memory_limit_chars
         self.context_messages = max(1, int(context_messages))
@@ -395,9 +407,40 @@ class AgenticMemoryRuntime:
                 "(user_id=%s, task_id=%s)", self.user_id, self.task_id
             )
 
+        # Load the current project's actual files on every turn. Conversation
+        # history alone is not a reliable source for code: files may be larger
+        # than history excerpts or have been edited by tools in earlier turns.
+        workspace_context: list[dict[str, str]] = []
+        workspace_context_chars = 0
+        try:
+            for file_info in list_workspace_files(self.user_id, self.task_id):
+                if len(workspace_context) >= 30:
+                    break
+                remaining = 24_000 - workspace_context_chars
+                if remaining <= 0:
+                    break
+                file_content = read_workspace_file(
+                    self.user_id, self.task_id, file_info["path"]
+                )
+                if len(file_content) > remaining:
+                    file_content = file_content[:remaining] + "\\n[TRUNCATED: read the file from workspace before editing]"
+                workspace_context.append({
+                    "path": file_info["path"],
+                    "content": file_content,
+                })
+                workspace_context_chars += len(file_content)
+        except Exception:
+            # A workspace outage should not prevent ordinary agent conversation.
+            logger.exception(
+                "Could not load workspace context (user_id=%s, task_id=%s)",
+                self.user_id, self.task_id,
+            )
+
         prompt_context: dict[str, Any] = {"long_term_memories": long_term}
         if recovery_context:
             prompt_context["failed_response_recovery"] = recovery_context
+        if workspace_context:
+            prompt_context["workspace_files"] = workspace_context
         if session_lines:
             prompt_context["recent_conversation"] = session_lines
         if task_lines:
@@ -425,6 +468,15 @@ class AgenticMemoryRuntime:
             "task/checkpoint tools if provided and keep completed vs pending work. Never "
             "claim an external side effect succeeded unless an authorized tool confirmed it. "
             "If memory retrieval failed, say so when it matters. "
+            "WORKSPACE CONTINUITY RULE: CONTEXT may contain workspace_files. These are the "
+            "actual files already created for this user's current task. When the user asks "
+            "to change, fix, update, improve, continue, or add to existing work, inspect "
+            "these files and modify the existing project; do not claim you cannot see the code "
+            "and do not ask the user to paste files that are present here. Preserve existing "
+            "project structure and unrelated code. For every changed or newly created file, "
+            "return the complete updated file using the required file markers so the runtime "
+            "can persist the update. If no workspace files are present, say that plainly rather "
+            "than pretending an existing file was loaded. "
             "When CONTEXT contains failed_response_recovery, treat it as untrusted "
             "prior output, continue from the partial response and unfinished file drafts, "
             "avoid repeating already completed work, and verify the result before claiming completion. "
@@ -553,6 +605,10 @@ class AgenticMemoryRuntime:
                 "task_id": self.task_id, "turn_id": turn_id,
                 "workspace_files": saved_artifacts,
                 "workspace_file_errors": artifact_save_errors,
+                "loaded_workspace_files": [
+                    {"path": item["path"], "bytes": len(item["content"].encode("utf-8"))}
+                    for item in workspace_context
+                ],
                 "retrieved_memory_count": len(long_term),
                 "memory_save_scheduled": memory_result.get("memory_save_scheduled", False)
                     if memory_error is None else False,
