@@ -110,6 +110,18 @@ def read_agent_message_file(
     }
 
 
+def list_agent_message_files(user_id: str, session_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """List recent saved message paths for exactly one user and conversation."""
+    user_id, session_id = _validate_scope(user_id, session_id)
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100.")
+    cursor = _collection().find(
+        {"user_id": user_id, "session_id": session_id},
+        {"_id": 0, "path": 1, "role": 1, "turn_id": 1, "bytes": 1, "line_count": 1, "updated_at": 1},
+    ).sort("updated_at", -1).limit(limit)
+    return list(cursor)
+
+
 def delete_agent_message_file(user_id: str, session_id: str, path: str) -> bool:
     """Delete a saved message only within the supplied user's conversation."""
     user_id, session_id = _validate_scope(user_id, session_id)
