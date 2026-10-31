@@ -333,3 +333,67 @@ The browser should render each `activity` event as a live status item, and
 continue rendering `token` and `result` events as before. If the API adapter
 drops unknown event types, the activity UI will remain empty even though the
 runtime emits updates.
+
+
+## First-token streaming and build-request latency
+
+For a real first token, configure the underlying chat model for streaming **before**
+creating the LangChain agent. The runtime cannot reliably turn streaming on after
+the model has been wrapped into an agent.
+
+For NVIDIA's OpenAI-compatible endpoint, use the OpenAI-compatible LangChain
+chat model with streaming enabled:
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain.agents import create_agent
+from memori import AgenticMemoryRuntime, create_workspace_tools
+
+model = ChatOpenAI(
+    model="YOUR_NVIDIA_MODEL",
+    api_key="YOUR_NVIDIA_API_KEY",
+    base_url="https://integrate.api.nvidia.com/v1",
+    temperature=0,
+    streaming=True,
+)
+
+tools = create_workspace_tools(user_id, session_id)
+agent = create_agent(model=model, tools=tools, system_prompt="...")
+runtime = AgenticMemoryRuntime(
+    user_id=user_id,
+    session_id=session_id,
+    agent=agent,
+    streaming=True,
+)
+
+for event in runtime.stream(user_message):
+    if event["type"] == "token":
+        yield event["content"]
+    elif event["type"] == "activity":
+        # Forward this as an SSE status event; it is not model text.
+        yield format_status_sse(event)
+    elif event["type"] == "result":
+        yield format_result_sse(event["result"])
+```
+
+The runtime consumes the agent's LangGraph `stream(stream_mode="values")`
+interface when available and forwards model token callbacks. Agents that only
+implement `invoke()` continue to work, but cannot provide true incremental
+tokens through this runtime. The underlying model must have streaming enabled;
+otherwise the provider may return the answer only after generation completes.
+
+Explicit file/build requests skip semantic-memory routing for that turn because
+the complete specification is already in the request and routing it through a
+memory model adds unnecessary work. Task checkpoints and event history still
+preserve the project request. The runtime also reuses the current session's event
+query for task context rather than issuing a duplicate history query.
+
+A status event such as "Preparing project context" can be sent immediately by
+the FastAPI endpoint, before calling the runtime. It is not a first model token.
+Measure separately: request accepted, first status event, first model token,
+and completed artifact persisted.
+
+**Important:** `create_workspace_tools(user_id, session_id)` must be included
+when constructing the agent, and the same stable `session_id` must be passed to
+the runtime on every turn. Otherwise project file tools cannot write into the
+runtime's active task workspace.
