@@ -111,3 +111,11 @@ def test_list_saved_message_paths_is_scoped_and_includes_line_counts(monkeypatch
     assert len(listed) == 1
     assert listed[0]["path"] == "messages/turn-a-user.txt"
     assert listed[0]["line_count"] == 2
+
+def test_long_conversation_message_can_be_saved_without_a_project_task(monkeypatch):
+    collection = FakeCollection()
+    monkeypatch.setattr(message_files, "_collection", lambda: collection)
+    saved = message_files.save_agent_message_file(
+        "user-a", "session-a", None, "turn-no-task", "user", "a long question"
+    )
+    assert saved["path"] == "messages/turn-no-task-user.txt"
