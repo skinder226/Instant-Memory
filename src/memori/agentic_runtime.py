@@ -430,9 +430,11 @@ class AgenticMemoryRuntime:
         memory_result: dict[str, Any] = {}
         memory_error: str | None = None
         try:
-            # Standalone greetings are not durable facts and should not be sent
-            # through semantic-memory extraction or retrieval.
-            if not _is_small_talk(user_input):
+            # Explicit artifact builds already contain their requirements in the
+            # user request. Running semantic-memory routing/retrieval for a large
+            # code-generation prompt adds provider and database work before the
+            # agent without improving the requested deliverable.
+            if not _is_small_talk(user_input) and not _requires_artifact(user_input):
                 raw_memory_result = memori(self.user_id, user_input, source="user")
                 if not isinstance(raw_memory_result, dict):
                     raise TypeError(
@@ -444,6 +446,13 @@ class AgenticMemoryRuntime:
                 long_term = retrieved if isinstance(retrieved, list) else []
                 if on_progress:
                     on_progress({"type": "activity", "stage": "memory_retrieved", "message": f"Retrieved {len(long_term)} relevant memories"})
+            elif _requires_artifact(user_input):
+                if on_progress:
+                    on_progress({
+                        "type": "activity",
+                        "stage": "memory_skipped",
+                        "message": "Skipping unrelated memory routing for this project build",
+                    })
         except Exception as exc:
             # Retrieval is best-effort: the agent should still answer with the
             # session/task context even when the memory API fails.
@@ -455,10 +464,9 @@ class AgenticMemoryRuntime:
         session_events = retrieve_agent_history(
             self.user_id, session_id=self.session_id, limit=fetch_limit
         )
-        task_events = (
-            retrieve_agent_history(self.user_id, task_id=self.task_id, limit=fetch_limit)
-            if self.task_id else []
-        )
+        # Tasks are bound to a session. Its event query already contains the
+        # current task's events, so a second Mongo query only duplicates I/O.
+        task_events = session_events if self.task_id else []
         task = get_agent_task(self.user_id, self.task_id) if self.task_id else None
         if self.task_id and task is None:
             task = save_agent_task(
@@ -691,14 +699,31 @@ class AgenticMemoryRuntime:
         partial_tokens: list[str] = []
         try:
             callbacks = [recorder, _TokenCallback(partial_tokens, on_token)]
-            result = self.agent.invoke(
-                {"messages": [{"role": "user", "content": prompt}]},
-                config={"callbacks": callbacks, "metadata": {
-                    "memori_user_id": self.user_id,
-                    "memori_session_id": self.session_id,
-                    "memori_task_id": self.task_id,
-                }},
-            )
+            agent_input = {"messages": [{"role": "user", "content": prompt}]}
+            agent_config = {"callbacks": callbacks, "metadata": {
+                "memori_user_id": self.user_id,
+                "memori_session_id": self.session_id,
+                "memori_task_id": self.task_id,
+            }}
+            # LangGraph agents expose stream(). Consuming values-mode keeps the
+            # final state while allowing model token callbacks to reach the SSE
+            # producer during generation. invoke() is retained for simple agents
+            # and test doubles that do not implement streaming.
+            stream_agent = getattr(self.agent, "stream", None)
+            if callable(stream_agent):
+                result = None
+                for snapshot in stream_agent(
+                    agent_input, config=agent_config, stream_mode="values"
+                ):
+                    if isinstance(snapshot, dict):
+                        result = snapshot
+                if result is None:
+                    raise RuntimeError(
+                        "The agent stream ended without a final state. "
+                        "Check the LangGraph agent and model streaming configuration."
+                    )
+            else:
+                result = self.agent.invoke(agent_input, config=agent_config)
             messages = result.get("messages", []) if isinstance(result, dict) else []
             final_message = next(
                 (m for m in reversed(messages)
