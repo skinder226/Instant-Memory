@@ -347,6 +347,7 @@ class AgenticMemoryRuntime:
     ) -> dict[str, Any]:
         if not self.task_id:
             self.task_id = f"task-{uuid.uuid4().hex}"
+        self._provided_task_id = self.task_id
         self._event(
             turn_id="task-start", role="system", event_type="task_started",
             content=f"Task started: {goal[:1000]}",
@@ -363,6 +364,7 @@ class AgenticMemoryRuntime:
         if task is None:
             raise ValueError("Task was not found for this user.")
         self.task_id = task_id
+        self._provided_task_id = task_id
         self._event(
             turn_id="task-resume", role="system", event_type="task_step",
             content=f"Resumed task: {task.get('goal', '')[:1000]}",
