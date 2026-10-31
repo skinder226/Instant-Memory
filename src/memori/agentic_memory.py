@@ -320,6 +320,21 @@ def append_agent_task_tool_history(user_id: str, task_id: str, entry: Mapping[st
     )
 
 
+def append_agent_task_tool_history(user_id: str, task_id: str, entry: Mapping[str, Any]) -> None:
+    """Append one bounded tool lifecycle record to a task checkpoint."""
+    user_id = _required_text(user_id, "user_id")
+    task_id = _required_text(task_id, "task_id")
+    if not isinstance(entry, Mapping):
+        raise TypeError("entry must be a mapping.")
+    _json_size(entry, "tool history entry")
+    _, tasks = _collections()
+    ensure_agent_memory_indexes()
+    tasks.update_one(
+        {"user_id": user_id, "task_id": task_id},
+        {"$push": {"tool_history": dict(entry)}, "$set": {"updated_at": _now()}},
+    )
+
+
 def find_latest_active_agent_task(user_id: str, session_id: str) -> dict[str, Any] | None:
     """Find the most recently updated active task in one user's conversation session.
 
