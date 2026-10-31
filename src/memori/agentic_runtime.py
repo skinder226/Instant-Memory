@@ -82,13 +82,23 @@ def _compact_history(
 
 def _is_small_talk(text: str) -> bool:
     value = (text or '').strip().lower().strip(' .,!?)')
-    return value in {'hi', 'hey', 'hello', 'hay', 'how are you', 'thanks', 'thank you', 'bye', 'good morning', 'good evening'}
+    return value in {
+        'hi', 'hey', 'hello', 'hay', 'hiya', 'howdy', 'hi there', 'hey there',
+        'hello there', 'how are you', "what's up", 'thanks', 'thank you', 'bye',
+        'good morning', 'good afternoon', 'good evening',
+    }
 
 
 def _is_actionable_task(text: str) -> bool:
     if _is_small_talk(text):
         return False
-    words = set((text or '').lower().replace(',', ' ').replace('.', ' ').split())
+    value = (text or '').strip().lower()
+    if value.startswith((
+        'how do i ', 'how can i ', 'how to ', 'what is ', 'what are ',
+        'why ', 'when ', 'where ', 'who ', 'which ', 'explain ',
+    )):
+        return False
+    words = set(value.replace(',', ' ').replace('.', ' ').split())
     return bool(words.intersection({'build','create','make','design','develop','generate','implement','write','code','fix','debug','update','change','edit','modify','improve','refactor','add','remove','delete','review','analyze','inspect','test','migrate','deploy','continue','finish'}))
 
 
@@ -111,7 +121,16 @@ def _continues_task(text: str, task: dict[str, Any] | None) -> bool:
     value = (text or '').lower()
     if value.lstrip().startswith(('build ', 'create ', 'make ', 'design ', 'develop ', 'generate ', 'start ')):
         return any(word in value for word in ('this', 'that', 'it', 'existing', 'current', 'same'))
-    return any(word in value for word in ('fix ', 'update ', 'change ', 'edit ', 'modify ', 'improve ', 'add ', 'remove ', 'delete ', 'continue', 'finish', ' it', ' this', ' that', 'existing', 'current', 'same', 'above', 'the project', 'the website', 'the app', 'the code'))
+    if any(phrase in value for phrase in ('new project', 'another project', 'different project', 'new website', 'another website', 'new app', 'another app')):
+        return False
+    return any(word in value for word in (
+        'fix ', 'update ', 'change ', 'edit ', 'modify ', 'improve ', 'add ',
+        'remove ', 'delete ', 'continue', 'finish', ' it', ' this', ' that',
+        'existing', 'current', 'same', 'above', 'the project', 'the website',
+        'the app', 'the code', 'the file', 'code', 'file', 'section', 'layout',
+        'design', 'style', 'color', 'colour', 'button', 'header', 'footer',
+        'component', 'feature', 'page', 'bug', 'error', 'issue',
+    ))
 
 
 def _utcnow() -> datetime:
