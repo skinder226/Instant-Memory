@@ -2,6 +2,7 @@ from memori.agentic_runtime import (
     _continues_task,
     _is_actionable_task,
     _is_small_talk,
+    _requires_artifact,
 )
 
 
@@ -31,3 +32,13 @@ def test_unrelated_new_project_does_not_reuse_existing_task():
 def test_legacy_greeting_goal_is_never_continued():
     task = {"goal": "Hay"}
     assert not _continues_task("Change the design", task)
+
+def test_building_a_website_requires_a_saved_artifact():
+    assert _requires_artifact(
+        "Build a single-page immersive portfolio website as one HTML file."
+    )
+
+
+def test_general_chat_does_not_require_a_saved_artifact():
+    assert not _requires_artifact("Hay")
+    assert not _requires_artifact("What is the difference between HTML and CSS?")
