@@ -606,10 +606,10 @@ class AgenticMemoryRuntime:
                 "Read only relevant line ranges when the file is large."
             )
         turn_specific_instruction = (
-            "CURRENT TURN IS ONLY A GREETING: respond briefly and naturally. Do not "
-            "resume, summarize, or start any older project just because it appears in "
-            "conversation history or saved-message metadata. Do not create or update a task. "
-            if small_talk else ""
+            """CURRENT TURN IS ONLY A GREETING: respond briefly and naturally. Do not 
+            resume, summarize, or start any older project just because it appears in 
+            conversation history or saved-message metadata. Do not create or update a task.
+            if small_talk else '' """
         )
         prompt = (
             turn_specific_instruction
