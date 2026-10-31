@@ -804,7 +804,7 @@ class AgenticMemoryRuntime:
                 )
                 # Persist any fully closed file blocks even if a later block was
                 # interrupted; keep only unfinished blocks in failed_responses.
-                for artifact in complete_files:
+                for artifact in (complete_files if self.task_id else []):
                     try:
                         write_workspace_file(
                             self.user_id, self.task_id,
@@ -830,7 +830,8 @@ class AgenticMemoryRuntime:
                     self.user_id, turn_id,
                 )
             self._event(
-                turn_id=turn_id, role="system", event_type="task_failed",
+                turn_id=turn_id, role="system",
+                event_type="task_failed" if self.task_id else "message",
                 content=f"Agent turn failed: {type(exc).__name__}: {exc}"[:3000],
             )
             if self.task_id:
