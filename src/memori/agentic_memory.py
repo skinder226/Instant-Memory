@@ -360,11 +360,12 @@ def find_latest_active_agent_task(user_id: str, session_id: str) -> dict[str, An
         "good morning", "good afternoon", "good evening", "thanks", "thank you",
         "thx", "bye", "goodbye",
     }
+    latest_valid_task = None
     for task in cursor:
         goal = str(task.get("goal") or "").strip().lower().strip(" .,!?)")
         if goal in non_task_goals:
-            # Retire legacy records created by older versions that treated a
-            # greeting as a resumable project. Keep the record for audit.
+            # Retire every legacy greeting in this session, not only greetings
+            # encountered before the first valid task in sort order.
             tasks.update_one(
                 {"user_id": user_id, "task_id": task.get("task_id")},
                 {"$set": {
@@ -374,9 +375,9 @@ def find_latest_active_agent_task(user_id: str, session_id: str) -> dict[str, An
                 }},
             )
             continue
-        if goal:
-            return task
-    return None
+        if goal and latest_valid_task is None:
+            latest_valid_task = task
+    return latest_valid_task
 
 
 def get_agent_task(user_id: str, task_id: str) -> dict[str, Any] | None:
