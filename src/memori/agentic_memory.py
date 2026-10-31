@@ -345,15 +345,26 @@ def find_latest_active_agent_task(user_id: str, session_id: str) -> dict[str, An
     user_id = _required_text(user_id, "user_id")
     session_id = _required_text(session_id, "session_id")
     _, tasks = _collections()
-    return tasks.find_one(
+    cursor = tasks.find(
         {
             "user_id": user_id,
             "session_id": session_id,
             "status": {"$in": ["pending", "running", "paused", "completed", "failed"]},
         },
         {"_id": 0},
-        sort=[("updated_at", DESCENDING), ("created_at", DESCENDING)],
-    )
+    ).sort([("updated_at", DESCENDING), ("created_at", DESCENDING)]).limit(100)
+    # Older versions accidentally checkpointed greetings such as "Hay" as tasks.
+    # Ignore those legacy records when resolving the current project workspace.
+    non_task_goals = {
+        "hi", "hey", "hello", "hay", "hiya", "howdy", "how are you",
+        "good morning", "good afternoon", "good evening", "thanks", "thank you",
+        "thx", "bye", "goodbye",
+    }
+    for task in cursor:
+        goal = str(task.get("goal") or "").strip().lower().strip(" .,!?)")
+        if goal and goal not in non_task_goals:
+            return task
+    return None
 
 
 def get_agent_task(user_id: str, task_id: str) -> dict[str, Any] | None:
