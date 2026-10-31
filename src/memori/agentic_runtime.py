@@ -79,6 +79,27 @@ def _compact_history(
     return lines
 
 
+def _is_small_talk(text: str) -> bool:
+    value = (text or '').strip().lower().strip(' .,!?)')
+    return value in {'hi', 'hey', 'hello', 'hay', 'how are you', 'thanks', 'thank you', 'bye', 'good morning', 'good evening'}
+
+
+def _is_actionable_task(text: str) -> bool:
+    if _is_small_talk(text):
+        return False
+    words = set((text or '').lower().replace(',', ' ').replace('.', ' ').split())
+    return bool(words.intersection({'build','create','make','design','develop','generate','implement','write','code','fix','debug','update','change','edit','modify','improve','refactor','add','remove','delete','review','analyze','inspect','test','migrate','deploy','continue','finish'}))
+
+
+def _continues_task(text: str, task: dict[str, Any] | None) -> bool:
+    if not task or not _is_actionable_task(str(task.get('goal') or '')):
+        return False
+    value = (text or '').lower()
+    if value.lstrip().startswith(('build ', 'create ', 'make ', 'design ', 'develop ', 'generate ', 'start ')):
+        return any(word in value for word in ('this', 'that', 'it', 'existing', 'current', 'same'))
+    return any(word in value for word in ('fix ', 'update ', 'change ', 'edit ', 'modify ', 'improve ', 'add ', 'remove ', 'delete ', 'continue', 'finish', ' it', ' this', ' that', 'existing', 'current', 'same', 'above', 'the project', 'the website', 'the app', 'the code'))
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -227,19 +248,11 @@ class AgenticMemoryRuntime:
             raise ValueError("history_limit must be between 1 and 100.")
         self.user_id = user_id.strip()
         self.agent = agent
-        # A host application must keep session_id stable for one chat. When it
-        # recreates this runtime between messages, reuse that session's active
-        # task instead of silently starting a new project/task.
+        # A session may contain greetings and multiple independent tasks.
+        # Select a task per user turn in run(), not when constructing the runtime.
         self.session_id = session_id or f"session-{uuid.uuid4().hex}"
-        if task_id is not None:
-            self.task_id = task_id
-        else:
-            active_task = find_latest_active_agent_task(self.user_id, self.session_id)
-            self.task_id = (
-                str(active_task["task_id"])
-                if active_task and active_task.get("task_id")
-                else f"task-{uuid.uuid4().hex}"
-            )
+        self._provided_task_id = task_id
+        self.task_id = task_id
         self.history_limit = history_limit
         self.memory_limit_chars = memory_limit_chars
         self.context_messages = max(1, int(context_messages))
@@ -318,6 +331,18 @@ class AgenticMemoryRuntime:
         user_input = user_input.strip()
         turn_id = f"turn-{uuid.uuid4().hex}"
         self._active_turn_id = turn_id
+        if _is_small_talk(user_input):
+            self.task_id = None
+        elif task_goal or _is_actionable_task(user_input):
+            candidate = get_agent_task(self.user_id, self._provided_task_id) if self._provided_task_id else find_latest_active_agent_task(self.user_id, self.session_id)
+            if self._provided_task_id and candidate:
+                self.task_id = self._provided_task_id
+            elif _continues_task(user_input, candidate):
+                self.task_id = str(candidate['task_id'])
+            else:
+                self.task_id = f"task-{uuid.uuid4().hex}"
+        else:
+            self.task_id = None
         saved_user_message = None
         if len(user_input.encode("utf-8")) > 8_000:
             try:
