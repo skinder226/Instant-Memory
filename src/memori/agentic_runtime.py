@@ -18,6 +18,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from .agentic_memory import (
     get_agent_task,
     find_latest_active_agent_task,
+    append_agent_task_tool_history,
     list_resumable_agent_tasks,
     record_agent_event,
     retrieve_agent_history,
@@ -163,6 +164,16 @@ class _ToolEventRecorder(BaseCallbackHandler):
         call_id = str(run_id)
         self.tool_names[call_id] = tool_name
         self._emit({"type": "activity", "stage": "tool_started", "tool": tool_name, "message": f"Using {tool_name}"})
+        if self.runtime.task_id:
+            try:
+                append_agent_task_tool_history(
+                    self.runtime.user_id, self.runtime.task_id,
+                    {"stage": "started", "tool": tool_name, "tool_call_id": call_id,
+                     "arguments": _json_text(_redact(inputs if inputs is not None else input_str), 3000),
+                     "at": _utcnow().isoformat()},
+                )
+            except Exception:
+                logger.exception("Could not append task tool history")
         self.runtime._event(
             turn_id=self.turn_id, role="assistant", event_type="tool_call",
             content=f"Calling tool {tool_name}",
@@ -178,6 +189,15 @@ class _ToolEventRecorder(BaseCallbackHandler):
         tool_name = self.tool_names.pop(call_id, "unknown_tool")
         safe_output = _json_text(_redact(output), 8000)
         self._emit({"type": "activity", "stage": "tool_completed", "tool": tool_name, "message": f"Finished {tool_name}"})
+        if self.runtime.task_id:
+            try:
+                append_agent_task_tool_history(
+                    self.runtime.user_id, self.runtime.task_id,
+                    {"stage": "completed", "tool": tool_name, "tool_call_id": call_id,
+                     "result": safe_output[:1500], "at": _utcnow().isoformat()},
+                )
+            except Exception:
+                logger.exception("Could not append task tool history")
         self.runtime._event(
             turn_id=self.turn_id, role="tool", event_type="tool_result",
             content=f"Tool {tool_name} completed: {safe_output[:1500]}",
@@ -192,6 +212,15 @@ class _ToolEventRecorder(BaseCallbackHandler):
         call_id = str(run_id)
         tool_name = self.tool_names.pop(call_id, "unknown_tool")
         self._emit({"type": "activity", "stage": "tool_failed", "tool": tool_name, "message": f"{tool_name} failed"})
+        if self.runtime.task_id:
+            try:
+                append_agent_task_tool_history(
+                    self.runtime.user_id, self.runtime.task_id,
+                    {"stage": "failed", "tool": tool_name, "tool_call_id": call_id,
+                     "error": _redact(str(error)[:1000]), "at": _utcnow().isoformat()},
+                )
+            except Exception:
+                logger.exception("Could not append task tool history")
         self.runtime._event(
             turn_id=self.turn_id, role="tool", event_type="tool_result",
             content=f"Tool {tool_name} failed: {type(error).__name__}",
