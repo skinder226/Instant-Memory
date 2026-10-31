@@ -232,3 +232,15 @@ def test_task_tool_history_is_appended_without_replacing_previous_entries(fake_d
     )
     task = agentic_memory.get_agent_task("user-1", "task-tools")
     assert [item["stage"] for item in task["tool_history"]] == ["started", "completed"]
+
+def test_latest_task_skips_legacy_greeting_task(fake_db):
+    agentic_memory.save_agent_task(
+        "user-1", "project-task", goal="Build an immersive portfolio",
+        status="running", session_id="chat-1",
+    )
+    agentic_memory.save_agent_task(
+        "user-1", "greeting-task", goal="Hay",
+        status="running", session_id="chat-1",
+    )
+    active = agentic_memory.find_latest_active_agent_task("user-1", "chat-1")
+    assert active["task_id"] == "project-task"
