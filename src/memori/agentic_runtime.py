@@ -365,17 +365,20 @@ class AgenticMemoryRuntime:
         memory_result: dict[str, Any] = {}
         memory_error: str | None = None
         try:
-            raw_memory_result = memori(self.user_id, user_input, source="user")
-            if not isinstance(raw_memory_result, dict):
-                raise TypeError(
-                    "memori() must return a dict; got "
-                    f"{type(raw_memory_result).__name__}. Check every return path in src/memori/api.py."
-                )
-            memory_result = raw_memory_result
-            retrieved = memory_result.get("retrieval", [])
-            long_term = retrieved if isinstance(retrieved, list) else []
-            if on_progress:
-                on_progress({"type": "activity", "stage": "memory_retrieved", "message": f"Retrieved {len(long_term)} relevant memories"})
+            # Standalone greetings are not durable facts and should not be sent
+            # through semantic-memory extraction or retrieval.
+            if not _is_small_talk(user_input):
+                raw_memory_result = memori(self.user_id, user_input, source="user")
+                if not isinstance(raw_memory_result, dict):
+                    raise TypeError(
+                        "memori() must return a dict; got "
+                        f"{type(raw_memory_result).__name__}. Check every return path in src/memori/api.py."
+                    )
+                memory_result = raw_memory_result
+                retrieved = memory_result.get("retrieval", [])
+                long_term = retrieved if isinstance(retrieved, list) else []
+                if on_progress:
+                    on_progress({"type": "activity", "stage": "memory_retrieved", "message": f"Retrieved {len(long_term)} relevant memories"})
         except Exception as exc:
             # Retrieval is best-effort: the agent should still answer with the
             # session/task context even when the memory API fails.
@@ -387,20 +390,22 @@ class AgenticMemoryRuntime:
         session_events = retrieve_agent_history(
             self.user_id, session_id=self.session_id, limit=fetch_limit
         )
-        task_events = retrieve_agent_history(
-            self.user_id, task_id=self.task_id, limit=fetch_limit
+        task_events = (
+            retrieve_agent_history(self.user_id, task_id=self.task_id, limit=fetch_limit)
+            if self.task_id else []
         )
-        task = get_agent_task(self.user_id, self.task_id)
-        if task is None:
+        task = get_agent_task(self.user_id, self.task_id) if self.task_id else None
+        if self.task_id and task is None:
             task = save_agent_task(
                 self.user_id, self.task_id,
                 goal=task_goal or user_input[:500], status="running",
                 session_id=self.session_id, current_step="Working on current request",
-                completed_steps=[], pending_steps=["Answer the current request"],
+                completed_steps=[], pending_steps=["Complete the requested work"],
+                context={"created_from": "user_request", "last_user_request": user_input[:1500]},
             )
-        elif task_goal:
+        elif self.task_id and task_goal and task:
             task = save_agent_task(
-                self.user_id, self.task_id, goal=task_goal, status="running",
+                self.user_id, self.task_id, goal=task.get("goal") or task_goal, status="running",
                 session_id=self.session_id, current_step=task.get("current_step"),
                 completed_steps=task.get("completed_steps", []),
                 pending_steps=task.get("pending_steps", []),
@@ -425,23 +430,24 @@ class AgenticMemoryRuntime:
         summary_is_dup = bool(summary) and any(
             summary[:200] in (e.get("content") or "") for e in session_events
         )
-        task_context = dict(task.get("context") or {})
+        task_context = dict((task or {}).get("context") or {})
         task_context.pop("last_user_request", None)  # same as CURRENT USER REQUEST
-        checkpoint = {
+        checkpoint = ({
             "task_id": task.get("task_id"), "goal": task.get("goal"),
             "status": task.get("status"), "current_step": task.get("current_step"),
             "completed_steps": task.get("completed_steps"),
             "pending_steps": task.get("pending_steps"),
             "result_summary": None if summary_is_dup else summary[:500],
             "context": task_context,
-        }
+        } if task else {})
         # Built-in recovery: no host application tool registration is required.
         # Only recover a failed turn belonging to this exact authenticated user,
         # session, and task. Keep the record in MongoDB until a later turn succeeds.
         recovery_context: dict[str, Any] | None = None
         try:
-            previous_failure = get_failed_response(
-                self.user_id, task_id=self.task_id, session_id=self.session_id
+            previous_failure = (
+                get_failed_response(self.user_id, task_id=self.task_id, session_id=self.session_id)
+                if self.task_id else None
             )
             if previous_failure and previous_failure.get("status") in {"failed", "recovering"}:
                 recovery_context = {
@@ -467,7 +473,7 @@ class AgenticMemoryRuntime:
         workspace_context: list[dict[str, str]] = []
         workspace_context_chars = 0
         try:
-            for file_info in list_workspace_files(self.user_id, self.task_id):
+            for file_info in (list_workspace_files(self.user_id, self.task_id) if self.task_id else []):
                 if len(workspace_context) >= 30:
                     break
                 remaining = 24_000 - workspace_context_chars
@@ -509,7 +515,8 @@ class AgenticMemoryRuntime:
             prompt_context["recent_conversation"] = session_lines
         if task_lines:
             prompt_context["earlier_task_history"] = task_lines
-        prompt_context["task_checkpoint"] = {k: v for k, v in checkpoint.items() if v not in (None, "", [], {})}
+        if checkpoint:
+            prompt_context["task_checkpoint"] = {k: v for k, v in checkpoint.items() if v not in (None, "", [], {})}
         if memory_error:
             prompt_context["memory_retrieval_error"] = memory_error
 
