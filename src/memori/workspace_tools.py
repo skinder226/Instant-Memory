@@ -5,7 +5,11 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
-from .agentic_memory import find_latest_active_agent_task
+from .agentic_memory import (
+    find_latest_active_agent_task,
+    get_agent_task,
+    save_agent_task,
+)
 from .code_workspace import (
     delete_workspace_file,
     edit_workspace_lines,
@@ -35,6 +39,67 @@ def create_workspace_tools(user_id: str, session_id: str) -> list:
         if not task or not task.get("task_id"):
             raise RuntimeError("No active project task exists in this conversation yet.")
         return str(task["task_id"])
+
+    @tool
+    def plan_task_steps(steps: list[str]) -> dict:
+        """Create or replace the ordered implementation plan for the active task. Call before starting a multi-step build."""
+        task_id = active_task_id()
+        if not isinstance(steps, list) or not 2 <= len(steps) <= 12:
+            raise ValueError("Provide between 2 and 12 concrete ordered steps.")
+        normalized = [str(step).strip() for step in steps]
+        if any(not step or len(step) > 300 for step in normalized):
+            raise ValueError("Every task step must contain 1-300 characters.")
+        if len({step.casefold() for step in normalized}) != len(normalized):
+            raise ValueError("Task plan steps must be unique.")
+        current = get_agent_task(scoped_user, task_id)
+        if current is None:
+            raise RuntimeError("Active task checkpoint could not be loaded.")
+        return save_agent_task(
+            scoped_user, task_id,
+            goal=current.get("goal") or "Project task",
+            status="running", session_id=scoped_session,
+            current_step=normalized[0],
+            completed_steps=current.get("completed_steps", []),
+            pending_steps=normalized,
+            tool_history=current.get("tool_history", []),
+            result_summary=current.get("result_summary"),
+            context={**(current.get("context") or {}), "plan_created": True},
+        )
+
+    @tool
+    def update_task_step(step: str, status: str) -> dict:
+        """Update one planned step. status must be in_progress or completed."""
+        task_id = active_task_id()
+        step = str(step).strip()
+        status = str(status).strip().lower()
+        if not step:
+            raise ValueError("step must not be empty.")
+        if status not in {"in_progress", "completed"}:
+            raise ValueError("status must be in_progress or completed.")
+        current = get_agent_task(scoped_user, task_id)
+        if current is None:
+            raise RuntimeError("Active task checkpoint could not be loaded.")
+        pending = list(current.get("pending_steps", []))
+        completed = list(current.get("completed_steps", []))
+        match = next((item for item in pending if str(item).casefold() == step.casefold()), None)
+        if match is None and not any(str(item).casefold() == step.casefold() for item in completed):
+            raise ValueError("Step was not found in the current plan. Call plan_task_steps first.")
+        if status == "completed" and match is not None:
+            pending.remove(match)
+            completed.append(match)
+        next_step = step if status == "in_progress" else (pending[0] if pending else "All planned steps completed")
+        next_status = "completed" if status == "completed" and not pending else "running"
+        return save_agent_task(
+            scoped_user, task_id,
+            goal=current.get("goal") or "Project task",
+            status=next_status, session_id=scoped_session,
+            current_step=next_step,
+            completed_steps=completed,
+            pending_steps=pending,
+            tool_history=current.get("tool_history", []),
+            result_summary=current.get("result_summary"),
+            context=current.get("context", {}),
+        )
 
     @tool
     def list_project_files() -> list[dict]:
@@ -90,6 +155,8 @@ def create_workspace_tools(user_id: str, session_id: str) -> list:
         return delete_agent_message_file(scoped_user, scoped_session, path)
 
     return [
+        plan_task_steps,
+        update_task_step,
         list_project_files,
         read_project_file,
         write_project_file,
