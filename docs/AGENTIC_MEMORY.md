@@ -366,14 +366,16 @@ runtime = AgenticMemoryRuntime(
     streaming=True,
 )
 
+import json
+
 for event in runtime.stream(user_message):
     if event["type"] == "token":
         yield event["content"]
     elif event["type"] == "activity":
         # Forward this as an SSE status event; it is not model text.
-        yield format_status_sse(event)
+        yield "event: activity\\ndata: " + json.dumps(event) + "\\n\\n"
     elif event["type"] == "result":
-        yield format_result_sse(event["result"])
+        yield "event: result\\ndata: " + json.dumps(event["result"]) + "\\n\\n"
 ```
 
 The runtime consumes the agent's LangGraph `stream(stream_mode="values")`
