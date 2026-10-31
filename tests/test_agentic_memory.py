@@ -244,3 +244,5 @@ def test_latest_task_skips_legacy_greeting_task(fake_db):
     )
     active = agentic_memory.find_latest_active_agent_task("user-1", "chat-1")
     assert active["task_id"] == "project-task"
+    greeting = agentic_memory.get_agent_task("user-1", "greeting-task")
+    assert greeting["status"] == "cancelled"
