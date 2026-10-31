@@ -97,11 +97,23 @@ failed response belonging to the same authenticated user, session, and task,
 marks it as recovering, and adds its partial output and unfinished file drafts to
 the agent context with instructions to continue rather than restart. A successful
 subsequent turn marks that recovery as `recovered`. Keep the same `user_id`
-and `session_id` for every message in one chat. When `task_id` is omitted, the
-runtime now looks up and reuses the latest task in that user/session (including
-completed tasks), so an app can recreate the runtime between turns without silently
-starting a new task. An explicitly supplied `task_id` still takes precedence. A
-new chat must receive a new session ID; never share session IDs across users or chats.
+and `session_id` for every message in one chat. When `task_id` is omitted, the runtime does **not** bind the whole chat
+session to one task during construction. It routes each turn separately:
+standalone greetings and ordinary questions stay in session history and do not
+create or update `agent_tasks`; a direct build/create request creates a new task;
+and clear edit/fix/add/continue requests may reuse the latest real project task
+in that same user/session. Legacy greeting checkpoints such as `goal="Hay"`
+are marked cancelled (not deleted) and ignored during task resolution. This
+prevents a second greeting from replacing a project's goal or result summary.
+An explicitly supplied `task_id` still takes precedence for actionable turns.
+A new chat must receive a new session ID; never share session IDs across users or chats.
+
+Tool callbacks append started/completed/failed entries to the task's
+`tool_history` using atomic MongoDB updates, so concurrent tool calls do not
+replace one another. For file-building requests, the runtime verifies that at
+least one workspace file exists before reporting success. The result's
+`workspace_files` contains the current saved workspace listing, including files
+written directly by registered tools, not only files parsed from the final answer.
 
 The runtime always attaches a token-capture callback. To preserve partial text,
 the underlying chat model/provider must itself have streaming enabled and emit
