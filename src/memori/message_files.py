@@ -48,15 +48,15 @@ def _validate_scope(user_id: str, session_id: str) -> tuple[str, str]:
 def save_agent_message_file(
     user_id: str,
     session_id: str,
-    task_id: str,
+    task_id: str | None,
     turn_id: str,
     role: str,
     content: str,
 ) -> dict[str, Any]:
     """Persist one full message and return its stable conversation-scoped path."""
     user_id, session_id = _validate_scope(user_id, session_id)
-    if not isinstance(task_id, str) or not task_id.strip():
-        raise ValueError("task_id must be a non-empty string.")
+    if task_id is not None and (not isinstance(task_id, str) or not task_id.strip()):
+        raise ValueError("task_id must be a non-empty string or None.")
     if not isinstance(turn_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", turn_id):
         raise ValueError("turn_id must contain only letters, numbers, underscores, or hyphens.")
     if role not in {"user", "assistant", "assistant_partial"}:
