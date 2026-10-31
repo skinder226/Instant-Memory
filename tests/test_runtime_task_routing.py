@@ -42,3 +42,8 @@ def test_building_a_website_requires_a_saved_artifact():
 def test_general_chat_does_not_require_a_saved_artifact():
     assert not _requires_artifact("Hay")
     assert not _requires_artifact("What is the difference between HTML and CSS?")
+
+def test_how_to_questions_do_not_create_tasks():
+    assert not _is_actionable_task("How do I build a website?")
+    assert not _is_actionable_task("What is the best way to update Python?")
+    assert _is_actionable_task("Can you build me a website?")
