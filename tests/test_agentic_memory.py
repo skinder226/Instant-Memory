@@ -47,6 +47,9 @@ class _FakeCollection:
             existing.update(update.get("$set", {}))
             for key, value in update.get("$setOnInsert", {}).items():
                 existing.setdefault(key, value)
+        if existing is not None:
+            for key, value in update.get("$push", {}).items():
+                existing.setdefault(key, []).append(value)
 
     @staticmethod
     def _matches(document, query):
@@ -213,3 +216,19 @@ def test_latest_active_task_is_reused_only_within_the_same_user_session(fake_db)
     assert active["task_id"] == "new-task"
     assert agentic_memory.find_latest_active_agent_task("user-1", "chat-2")["task_id"] == "other-chat-task"
     assert agentic_memory.find_latest_active_agent_task("user-2", "chat-1")["task_id"] == "private-task"
+
+
+
+def test_task_tool_history_is_appended_without_replacing_previous_entries(fake_db):
+    agentic_memory.save_agent_task(
+        "user-1", "task-tools", goal="Build a website", status="running",
+        session_id="chat-1",
+    )
+    agentic_memory.append_agent_task_tool_history(
+        "user-1", "task-tools", {"stage": "started", "tool": "write_project_file"},
+    )
+    agentic_memory.append_agent_task_tool_history(
+        "user-1", "task-tools", {"stage": "completed", "tool": "write_project_file"},
+    )
+    task = agentic_memory.get_agent_task("user-1", "task-tools")
+    assert [item["stage"] for item in task["tool_history"]] == ["started", "completed"]
