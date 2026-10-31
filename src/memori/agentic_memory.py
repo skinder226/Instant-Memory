@@ -362,7 +362,19 @@ def find_latest_active_agent_task(user_id: str, session_id: str) -> dict[str, An
     }
     for task in cursor:
         goal = str(task.get("goal") or "").strip().lower().strip(" .,!?)")
-        if goal and goal not in non_task_goals:
+        if goal in non_task_goals:
+            # Retire legacy records created by older versions that treated a
+            # greeting as a resumable project. Keep the record for audit.
+            tasks.update_one(
+                {"user_id": user_id, "task_id": task.get("task_id")},
+                {"$set": {
+                    "status": "cancelled",
+                    "current_step": "Ignored: ordinary conversation is not a task",
+                    "updated_at": _now(),
+                }},
+            )
+            continue
+        if goal:
             return task
     return None
 
